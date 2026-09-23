@@ -1,0 +1,24 @@
+{
+    "cpu": {
+        "mean": 0.007412503366470337,
+        "std": 0.018342858884751463,
+        "min": 0.0,
+        "max": 0.5380859375,
+        "p95": 0.0322265625
+    },
+    "ram": {
+        "mean": 0.005589474601745605,
+        "std": 0.01636271812496496,
+        "min": 0.0,
+        "max": 0.223876953125,
+        "p95": 0.01971435546875
+    },
+    "sample_size": 100000,
+    "source": "d:\\RL\\dataset\\borg_traces_data.csv",
+    "note": "Extracted from Google Cluster Workload Traces 2019 'average_usage' column.",
+    "arrival_rate": {
+        "lambda_steady": 10.0,
+        "lambda_bursty": 50.0,
+        "spike_prob": 0.05
+    }
+}
