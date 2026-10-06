@@ -10,7 +10,7 @@ from stable_baselines3 import DQN, PPO
 from environment.cloud_env import CloudSelfHealingEnv
 from agents.q_learning_agent import QLearningAgent
 from agents.rule_based_agent import RuleBasedAgent
-from configs import CONFIGS
+from configs import CONFIGS, make_config
 
 # Configuration
 EVAL_EPISODES = 10
@@ -164,9 +164,7 @@ def main():
         valid_seeds = 0
         
         # We need an env with the right config for evaluation logic
-        ablation_config = CONFIGS[base_env_name]
-        ablation_config.cost_aware = cost_aware
-        ablation_config.anti_flapping = anti_flapping
+        ablation_config = make_config(base_env_name, cost_aware=cost_aware, anti_flapping=anti_flapping)
         ablation_env = CloudSelfHealingEnv(config=ablation_config)
         
         for seed in SEEDS:

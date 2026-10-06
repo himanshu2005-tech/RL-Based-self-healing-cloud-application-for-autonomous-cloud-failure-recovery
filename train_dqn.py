@@ -9,7 +9,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.env_util import make_vec_env
 
 from environment.cloud_env import CloudSelfHealingEnv
-from configs import CONFIGS, EnvConfig
+from configs import CONFIGS, make_config
 
 def set_seed(seed):
     random.seed(seed)
@@ -65,9 +65,7 @@ def main():
 
     set_seed(args.seed)
 
-    base_config = CONFIGS[args.config]
-    base_config.cost_aware = args.cost_aware
-    base_config.anti_flapping = args.anti_flapping
+    base_config = make_config(args.config, cost_aware=args.cost_aware, anti_flapping=args.anti_flapping)
 
     def make_env():
         return CloudSelfHealingEnv(config=base_config)

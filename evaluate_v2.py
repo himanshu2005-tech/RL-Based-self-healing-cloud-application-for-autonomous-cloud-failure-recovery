@@ -1,11 +1,15 @@
 """
 Evaluate every agent on the v2 scenarios using the same test episodes.
 
-    python evaluate_v2.py [--seeds 1 2 3] [--envs Mixed ...]
+    python evaluate_v2.py [--seeds 1 2 3 4 5] [--envs Mixed ...] [--ablation-env Mixed]
 
 Writes results/v2/evaluation_episodes.csv (one row per agent/seed/episode) and
 results/v2/evaluation_summary.csv. Std is over all test episodes pooled across
 training seeds; "Seed Std" is the std of the per-seed means.
+
+With --ablation-env, PPO models trained without the action-cost and/or flapping
+terms are evaluated on the full reward (the same environment as the full model),
+written to results/v2/ablation_episodes.csv and results/v2/ablation_summary.csv.
 """
 import argparse
 import os
@@ -20,18 +24,22 @@ from configs import SCENARIOS
 from environment.cloud_env_v2 import CloudSelfHealingEnvV2, ACTION_NAMES
 from train_v2 import MODEL_DIR, RESULT_DIR, make_q_agent, run_prefix
 
-TEST_SEEDS = range(10_000, 10_050)
+TEST_SEEDS = range(10_000, 10_100)
 BASELINES = ["Hold", "HPA", "HPA+Heal"]
 LEARNED = ["QLearning", "DQN", "PPO"]
 
 
-def load_policy(algo, env_name, seed, config):
-    """Returns obs -> action, or None if the model file is missing."""
+ABLATION_VARIANTS = [(True, True), (False, True), (True, False), (False, False)]
+
+
+def load_policy(algo, env_name, seed, config, cost_aware=True, anti_flapping=True):
+    """Returns obs -> action, or None if the model file is missing.
+    cost_aware / anti_flapping select which trained variant to load."""
     if algo == "Hold":
         return HoldAgent().act
     if algo in ("HPA", "HPA+Heal"):
         return HPAAgent(max_replicas=config.max_replicas, heal=(algo == "HPA+Heal")).act
-    path = os.path.join(MODEL_DIR, run_prefix(algo, env_name, seed, config.cost_aware, config.anti_flapping))
+    path = os.path.join(MODEL_DIR, run_prefix(algo, env_name, seed, cost_aware, anti_flapping))
     if algo == "QLearning":
         if not os.path.exists(path + ".pkl"):
             return None
@@ -94,11 +102,34 @@ def summarize(df):
     return pd.DataFrame(out)
 
 
+def evaluate_ablation(env_name, seeds):
+    # Every variant runs in the full-reward environment, so rewards are comparable
+    config = SCENARIOS[env_name]
+    rows = []
+    for cost_aware, anti_flapping in ABLATION_VARIANTS:
+        variant = f"Cost={cost_aware}, Flapping={anti_flapping}"
+        for seed in seeds:
+            policy = load_policy("PPO", env_name, seed, config, cost_aware, anti_flapping)
+            if policy is None:
+                print(f"  missing ablation model: {variant} seed {seed}")
+                continue
+            for r in run_episodes(lambda: policy, config):
+                rows.append({"Environment": env_name, "Algorithm": variant, "train_seed": seed, **r})
+    episodes = pd.DataFrame(rows)
+    episodes.to_csv(os.path.join(RESULT_DIR, "ablation_episodes.csv"), index=False)
+    summary = summarize(episodes).rename(columns={"Algorithm": "Variant (PPO, trained with)"})
+    summary.to_csv(os.path.join(RESULT_DIR, "ablation_summary.csv"), index=False)
+    print("\n--- Ablation (all variants scored with the full reward) ---")
+    print(summary.to_string(index=False))
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3])
+    parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3, 4, 5])
     parser.add_argument("--envs", nargs="+", default=list(SCENARIOS))
+    parser.add_argument("--ablation-env", default=None)
     args = parser.parse_args()
+    pd.set_option("display.width", 250)
 
     rows = []
     for env_name in args.envs:
@@ -123,8 +154,10 @@ def main():
     episodes.to_csv(os.path.join(RESULT_DIR, "evaluation_episodes.csv"), index=False)
     summary = summarize(episodes)
     summary.to_csv(os.path.join(RESULT_DIR, "evaluation_summary.csv"), index=False)
-    pd.set_option("display.width", 250)
     print(summary.to_string(index=False))
+
+    if args.ablation_env:
+        evaluate_ablation(args.ablation_env, args.seeds)
 
 
 if __name__ == "__main__":

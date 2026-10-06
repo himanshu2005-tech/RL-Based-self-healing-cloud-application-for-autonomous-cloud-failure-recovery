@@ -1,7 +1,10 @@
 """
 Train every algorithm on every v2 scenario and seed in parallel, then evaluate.
 
-    python run_v2_experiments.py --seeds 1 2 3 --jobs 6
+    python run_v2_experiments.py --seeds 1 2 3 4 5 --jobs 6 --ablation-env Mixed
+
+--ablation-env adds PPO runs without the action-cost and/or flapping terms.
+--eval-seeds lets training cover only new seeds while evaluating all of them.
 """
 import argparse
 import itertools
@@ -24,10 +27,12 @@ def run(cmd, log_name):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3])
+    parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3, 4, 5])
     parser.add_argument("--envs", nargs="+", default=list(SCENARIOS))
     parser.add_argument("--algos", nargs="+", default=["PPO", "DQN", "QLearning"])
     parser.add_argument("--jobs", type=int, default=6)
+    parser.add_argument("--ablation-env", default=None)
+    parser.add_argument("--eval-seeds", type=int, nargs="+", default=None)
     parser.add_argument("--skip-eval", action="store_true")
     args = parser.parse_args()
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -36,14 +41,24 @@ def main():
     jobs = [([sys.executable, "-W", "ignore", "train_v2.py", "--algo", a, "--env", e, "--seed", str(s)],
              f"{a}_{e}_seed{s}.log")
             for a, e, s in itertools.product(args.algos, args.envs, args.seeds)]
+    if args.ablation_env:
+        for s in (args.eval_seeds or args.seeds):
+            for flags, tag in [(["--no-cost_aware"], "noCost"), (["--no-anti_flapping"], "noFlap"),
+                               (["--no-cost_aware", "--no-anti_flapping"], "noCost_noFlap")]:
+                jobs.insert(0, ([sys.executable, "-W", "ignore", "train_v2.py", "--algo", "PPO",
+                              "--env", args.ablation_env, "--seed", str(s), *flags],
+                             f"PPO_{args.ablation_env}_seed{s}_{tag}.log"))
     with ThreadPoolExecutor(args.jobs) as pool:
         codes = list(pool.map(lambda j: run(*j), jobs))
     failed = sum(c != 0 for c in codes)
     print(f"{len(jobs) - failed}/{len(jobs)} training runs succeeded", flush=True)
 
     if not args.skip_eval:
-        subprocess.call([sys.executable, "-W", "ignore", "evaluate_v2.py", "--seeds", *map(str, args.seeds),
-                         "--envs", *args.envs])
+        cmd = [sys.executable, "-W", "ignore", "evaluate_v2.py", "--seeds", *map(str, args.eval_seeds or args.seeds),
+               "--envs", *args.envs]
+        if args.ablation_env:
+            cmd += ["--ablation-env", args.ablation_env]
+        subprocess.call(cmd)
 
 
 if __name__ == "__main__":

@@ -78,6 +78,12 @@ CONFIGS = {
 }
 
 
+def make_config(name: str, **overrides) -> EnvConfig:
+    """A fresh EnvConfig for a named profile, so callers never mutate the shared CONFIGS.
+    (dataclasses.replace would re-run __post_init__ and scale the High profile twice.)"""
+    return EnvConfig(traffic_profile=CONFIGS[name].traffic_profile, **overrides)
+
+
 # --- v2 environment (environment/cloud_env_v2.py) ---
 # Load is measured in replica-capacity units: cpu = load / replicas.
 

@@ -1,0 +1,208 @@
+"""
+Significance tests and figures for the v2 results. Run after evaluate_v2.py.
+
+    python analyze_v2.py
+
+Writes results/v2/significance.csv, plots/v2/learning_curves.png and
+plots/v2/gain_vs_hpa_heal.png.
+
+Tests, per scenario, PPO against every other agent:
+  * seed level (the unit of replication for a training algorithm): Welch t-test
+    on per-seed mean rewards against another learned algorithm, or a one-sample
+    t-test against a deterministic baseline's mean on the same episodes;
+  * episode level: Wilcoxon signed-rank on the paired test episodes (each agent
+    averaged over its seeds);
+  * a 95% bootstrap CI of the mean reward difference, resampling seeds and
+    episodes together.
+p-values are Holm-corrected across all comparisons within each test.
+"""
+import glob
+import os
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+from agents.baselines import HPAAgent
+from configs import SCENARIOS
+from environment.cloud_env_v2 import CloudSelfHealingEnvV2
+from train_v2 import RESULT_DIR, VAL_SEEDS
+
+PLOT_DIR = os.path.join("plots", "v2")
+REFERENCE = "PPO"
+OTHERS = ["DQN", "QLearning", "HPA+Heal", "HPA"]
+LEARNED = ["PPO", "DQN", "QLearning"]
+
+# Chart style: validated categorical slots 1-3 (blue, orange, aqua) on the light surface
+COLORS = {"PPO": "#2a78d6", "DQN": "#eb6834", "QLearning": "#1baf7a"}
+SURFACE, INK, INK_2, MUTED, GRID, AXIS = "#fcfcfb", "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7"
+
+
+def holm(pvals):
+    p = np.asarray(pvals, dtype=float)
+    order = np.argsort(p)
+    adjusted = np.empty_like(p)
+    running = 0.0
+    for rank, i in enumerate(order):
+        running = max(running, (len(p) - rank) * p[i])
+        adjusted[i] = min(1.0, running)
+    return adjusted
+
+
+def bootstrap_diff(a, b, rng, n=5000):
+    """a, b: arrays [seeds, episodes] of rewards on the same episodes. Resample seeds and episodes."""
+    diffs = np.empty(n)
+    n_ep = a.shape[1]
+    for k in range(n):
+        ep = rng.integers(n_ep, size=n_ep)
+        sa = a[rng.integers(a.shape[0], size=a.shape[0])][:, ep]
+        sb = b[rng.integers(b.shape[0], size=b.shape[0])][:, ep]
+        diffs[k] = sa.mean() - sb.mean()
+    return np.percentile(diffs, [2.5, 97.5])
+
+
+def significance(df):
+    rng = np.random.default_rng(0)
+    rows = []
+    for env_name, g in df.groupby("Environment", sort=False):
+        def matrix(algo):
+            m = g[g.Algorithm == algo].pivot_table(index="train_seed", columns="episode_seed", values="reward")
+            return m.sort_index(axis=1)
+        ref = matrix(REFERENCE)
+        for other in OTHERS:
+            oth = matrix(other)
+            if oth.empty or ref.empty:
+                continue
+            ref_seed, oth_seed = ref.mean(axis=1).values, oth.mean(axis=1).values
+            if other in LEARNED:
+                p_seed = stats.ttest_ind(ref_seed, oth_seed, equal_var=False).pvalue
+                seed_test = "Welch t"
+            else:
+                p_seed = stats.ttest_1samp(ref_seed, oth_seed.mean()).pvalue
+                seed_test = "1-sample t"
+            p_ep = stats.wilcoxon(ref.mean(axis=0).values, oth.mean(axis=0).values).pvalue
+            lo, hi = bootstrap_diff(ref.values, oth.values, rng)
+            rows.append({
+                "Environment": env_name, "Comparison": f"{REFERENCE} vs {other}",
+                "PPO Mean": ref.values.mean(), "Other Mean": oth.values.mean(),
+                "Diff": ref.values.mean() - oth.values.mean(), "CI Low": lo, "CI High": hi,
+                "Seeds (PPO/Other)": f"{len(ref_seed)}/{len(oth_seed)}",
+                "Seed Test": seed_test, "p Seed": p_seed, "p Episode": p_ep,
+            })
+    out = pd.DataFrame(rows)
+    out["p Seed (Holm)"] = holm(out["p Seed"])
+    out["p Episode (Holm)"] = holm(out["p Episode"])
+    out["Significant (both, 0.05)"] = (out["p Seed (Holm)"] < 0.05) & (out["p Episode (Holm)"] < 0.05)
+    return out
+
+
+def hpa_heal_validation(config):
+    env = CloudSelfHealingEnvV2(config)
+    totals = []
+    for s in VAL_SEEDS:
+        agent = HPAAgent(max_replicas=config.max_replicas, heal=True)
+        obs, _ = env.reset(seed=s)
+        done, total = False, 0.0
+        while not done:
+            obs, r, terminated, truncated, _ = env.step(agent.act(obs))
+            total += r
+            done = terminated or truncated
+        totals.append(total)
+    return float(np.mean(totals))
+
+
+def style(ax):
+    ax.set_facecolor(SURFACE)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(AXIS)
+    ax.tick_params(colors=MUTED, labelsize=8)
+    ax.grid(axis="y", color=GRID, linewidth=0.8)
+    ax.set_axisbelow(True)
+
+
+def plot_learning_curves(envs):
+    fig, axes = plt.subplots(2, 4, figsize=(15, 7), facecolor=SURFACE)
+    for ax, env_name in zip(axes.flat, envs):
+        style(ax)
+        for algo in LEARNED:
+            files = sorted(glob.glob(os.path.join(RESULT_DIR, f"{algo}_{env_name}_seed[0-9]_val.csv")))
+            if not files:
+                continue
+            curves = [pd.read_csv(f) for f in files]
+            n = min(len(c) for c in curves)
+            x = curves[0].timestep.values[:n] / 1000
+            y = np.stack([c.val_reward.values[:n] for c in curves])
+            ax.fill_between(x, y.min(0), y.max(0), color=COLORS[algo], alpha=0.15, linewidth=0)
+            ax.plot(x, y.mean(0), color=COLORS[algo], linewidth=2, label=algo)
+            ax.annotate(algo, (x[-1], y.mean(0)[-1]), xytext=(4, 0), textcoords="offset points",
+                        fontsize=8, color=INK_2, va="center")
+        ref = hpa_heal_validation(SCENARIOS[env_name])
+        ax.axhline(ref, color=MUTED, linewidth=1.5, linestyle=(0, (4, 3)), label="HPA+Heal")
+        ax.set_title(env_name, fontsize=10, color=INK, loc="left")
+        ax.set_xlabel("environment steps (thousands)", fontsize=8, color=MUTED)
+        ax.set_ylabel("validation reward", fontsize=8, color=MUTED)
+    axes.flat[-1].axis("off")
+    handles, labels = axes.flat[0].get_legend_handles_labels()
+    axes.flat[-1].legend(handles, labels, loc="center", frameon=False, fontsize=10, labelcolor=INK_2,
+                         title="mean of seeds, band = min to max", title_fontsize=9)
+    fig.suptitle("Validation reward during training (20 fixed validation episodes)", x=0.01, ha="left",
+                 fontsize=12, color=INK)
+    fig.tight_layout()
+    fig.savefig(os.path.join(PLOT_DIR, "learning_curves.png"), dpi=130, facecolor=SURFACE)
+    plt.close(fig)
+
+
+def plot_gain(sig, n_episodes):
+    fig, ax = plt.subplots(figsize=(9, 4.8), facecolor=SURFACE)
+    style(ax)
+    ax.grid(axis="y", visible=False)
+    ax.grid(axis="x", color=GRID, linewidth=0.8)
+    envs = list(dict.fromkeys(sig.Environment))
+    algos = [("PPO", "PPO vs HPA+Heal"), ("DQN", None), ("QLearning", None)]
+    # Gain of each learned agent over HPA+Heal = (PPO - HPA+Heal) - (PPO - other)
+    base = sig[sig.Comparison == "PPO vs HPA+Heal"].set_index("Environment")
+    for k, (algo, _) in enumerate(algos):
+        ys = np.arange(len(envs)) + (k - 1) * 0.22
+        if algo == "PPO":
+            mid, lo, hi = base.Diff, base["CI Low"], base["CI High"]
+        else:
+            o = sig[sig.Comparison == f"PPO vs {algo}"].set_index("Environment")
+            mid = base.Diff - o.Diff
+            lo, hi = mid, mid  # CI shown for PPO only
+        mid = mid.reindex(envs)
+        ax.scatter(mid, ys, s=36, color=COLORS[algo], edgecolor=SURFACE, linewidth=1.5, zorder=3, label=algo)
+        if algo == "PPO":
+            ax.hlines(ys, lo.reindex(envs), hi.reindex(envs), color=COLORS[algo], linewidth=2, zorder=2)
+    ax.axvline(0, color=AXIS, linewidth=1.2)
+    ax.set_yticks(np.arange(len(envs)), envs, color=INK_2, fontsize=9)
+    ax.invert_yaxis()
+    ax.set_xlabel(f"mean test reward minus HPA+Heal (same {n_episodes} episodes); PPO line = 95% bootstrap CI",
+                  fontsize=8, color=MUTED)
+    ax.legend(frameon=False, fontsize=9, labelcolor=INK_2, loc="lower left", bbox_to_anchor=(0, 1.0), ncol=3)
+    ax.set_title("Reward gain over the best rule-based baseline", fontsize=12, color=INK, loc="left", pad=28)
+    fig.tight_layout()
+    fig.savefig(os.path.join(PLOT_DIR, "gain_vs_hpa_heal.png"), dpi=130, facecolor=SURFACE)
+    plt.close(fig)
+
+
+def main():
+    os.makedirs(PLOT_DIR, exist_ok=True)
+    df = pd.read_csv(os.path.join(RESULT_DIR, "evaluation_episodes.csv"))
+    sig = significance(df)
+    sig.round(4).to_csv(os.path.join(RESULT_DIR, "significance.csv"), index=False)
+    pd.set_option("display.width", 250)
+    show = sig[["Environment", "Comparison", "Diff", "CI Low", "CI High", "Seeds (PPO/Other)",
+                "p Seed (Holm)", "p Episode (Holm)", "Significant (both, 0.05)"]]
+    print(show.to_string(index=False, float_format=lambda v: f"{v:.3g}"))
+    plot_learning_curves(list(dict.fromkeys(df.Environment)))
+    plot_gain(sig, df.episode_seed.nunique())
+    print(f"figures written to {PLOT_DIR}")
+
+
+if __name__ == "__main__":
+    main()
