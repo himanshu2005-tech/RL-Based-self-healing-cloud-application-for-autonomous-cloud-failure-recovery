@@ -76,7 +76,19 @@ def main():
 
     print(f"Training DQN on {args.config} | Seed {args.seed} | Cost-Aware {args.cost_aware} | Anti-Flapping {args.anti_flapping}")
 
-    model = DQN("MlpPolicy", env, verbose=0, seed=args.seed)
+    # SB3 defaults (target_update_interval=10000, learning_starts=100) sync the target
+    # network only twice in a 20k-step run, which leaves a near-passive policy.
+    model = DQN(
+        "MlpPolicy",
+        env,
+        target_update_interval=500,
+        learning_rate=5e-4,
+        exploration_fraction=0.3,
+        learning_starts=1000,
+        batch_size=64,
+        verbose=0,
+        seed=args.seed,
+    )
     
     callback = MetricsLoggingCallback()
     model.learn(total_timesteps=args.timesteps, callback=callback)
