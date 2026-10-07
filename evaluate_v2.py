@@ -16,17 +16,17 @@ import os
 
 import numpy as np
 import pandas as pd
-from stable_baselines3 import DQN, PPO
+from stable_baselines3 import A2C, DQN, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
-from agents.baselines import HoldAgent, HPAAgent
+from agents.baselines import HoldAgent, HPAAgent, ThresholdAgent
 from configs import SCENARIOS
 from environment.cloud_env_v2 import CloudSelfHealingEnvV2, ACTION_NAMES
 from train_v2 import MODEL_DIR, RESULT_DIR, make_q_agent, run_prefix
 
 TEST_SEEDS = range(10_000, 10_100)
-BASELINES = ["Hold", "HPA", "HPA+Heal"]
-LEARNED = ["QLearning", "DQN", "PPO"]
+BASELINES = ["Hold", "HPA", "HPA+Heal", "Tuned HPA+Heal", "Tuned Threshold"]
+LEARNED = ["QLearning", "DQN", "A2C", "PPO"]
 
 
 ABLATION_VARIANTS = [(True, True), (False, True), (True, False), (False, False)]
@@ -39,6 +39,13 @@ def load_policy(algo, env_name, seed, config, cost_aware=True, anti_flapping=Tru
         return HoldAgent().act
     if algo in ("HPA", "HPA+Heal"):
         return HPAAgent(max_replicas=config.max_replicas, heal=(algo == "HPA+Heal")).act
+    if algo.startswith("Tuned "):
+        # Parameters grid-searched on the validation episodes by tune_baselines.py
+        from tune_baselines import load_tuned
+        params = load_tuned()[env_name][algo[len("Tuned "):]]["params"]
+        if algo == "Tuned Threshold":
+            return ThresholdAgent(max_replicas=config.max_replicas, **params).act
+        return HPAAgent(max_replicas=config.max_replicas, heal=True, **params).act
     path = os.path.join(MODEL_DIR, run_prefix(algo, env_name, seed, cost_aware, anti_flapping))
     if algo == "QLearning":
         if not os.path.exists(path + ".pkl"):
@@ -48,7 +55,7 @@ def load_policy(algo, env_name, seed, config, cost_aware=True, anti_flapping=Tru
         return lambda obs: int(agent.act(obs, evaluate=True))
     if not os.path.exists(path + ".zip"):
         return None
-    model = (PPO if algo == "PPO" else DQN).load(path + ".zip", device="cpu")
+    model = {"PPO": PPO, "A2C": A2C, "DQN": DQN}[algo].load(path + ".zip", device="cpu")
     if os.path.exists(path + "_vecnormalize.pkl"):
         vecnorm = VecNormalize.load(path + "_vecnormalize.pkl", DummyVecEnv([lambda: CloudSelfHealingEnvV2(config)]))
         vecnorm.training = False

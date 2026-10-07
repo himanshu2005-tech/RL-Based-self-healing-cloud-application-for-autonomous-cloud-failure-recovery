@@ -1,5 +1,6 @@
 """
-Train every algorithm on every v2 scenario and seed in parallel, then evaluate.
+Train every algorithm on every v2 scenario and seed in parallel, tune the rule
+baselines on the validation episodes, then evaluate.
 
     python run_v2_experiments.py --seeds 1 2 3 4 5 --jobs 6 --ablation-env Mixed
 
@@ -29,10 +30,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3, 4, 5])
     parser.add_argument("--envs", nargs="+", default=list(SCENARIOS))
-    parser.add_argument("--algos", nargs="+", default=["PPO", "DQN", "QLearning"])
+    parser.add_argument("--algos", nargs="+", default=["PPO", "A2C", "DQN", "QLearning"])
     parser.add_argument("--jobs", type=int, default=6)
     parser.add_argument("--ablation-env", default=None)
     parser.add_argument("--eval-seeds", type=int, nargs="+", default=None)
+    parser.add_argument("--skip-tune", action="store_true", help="reuse results/v2/tuned_baselines.json")
     parser.add_argument("--skip-eval", action="store_true")
     args = parser.parse_args()
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -54,6 +56,9 @@ def main():
     print(f"{len(jobs) - failed}/{len(jobs)} training runs succeeded", flush=True)
 
     if not args.skip_eval:
+        if not args.skip_tune:
+            # Rule baselines get the same validation episodes as the RL checkpoints
+            subprocess.call([sys.executable, "-W", "ignore", "tune_baselines.py", "--jobs", str(args.jobs)])
         cmd = [sys.executable, "-W", "ignore", "evaluate_v2.py", "--seeds", *map(str, args.eval_seeds or args.seeds),
                "--envs", *args.envs]
         if args.ablation_env:

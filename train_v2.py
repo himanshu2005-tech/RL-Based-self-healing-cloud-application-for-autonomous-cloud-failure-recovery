@@ -16,20 +16,17 @@ import random
 import numpy as np
 import pandas as pd
 import torch
-from stable_baselines3 import DQN, PPO
+from stable_baselines3 import A2C, DQN, PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import VecNormalize
 
 from agents.q_learning_agent import QLearningAgent
-from configs import SCENARIOS
+from configs import MODEL_DIR, RESULT_DIR, SCENARIOS, VAL_SEEDS
 from environment.cloud_env_v2 import (
     CloudSelfHealingEnvV2, OBS_CPU, OBS_MEM, OBS_ERR, OBS_REPLICAS, OBS_PENDING, OBS_SINCE_SCALE,
 )
 
-VAL_SEEDS = range(9000, 9020)
-MODEL_DIR = os.path.join("models", "v2")
-RESULT_DIR = os.path.join("results", "v2")
 
 
 def run_prefix(algo, env_name, seed, cost_aware=True, anti_flapping=True):
@@ -119,17 +116,29 @@ class TrainCallback(BaseCallback):
         return True
 
 
-def train_sb3(algo, config, seed, timesteps, prefix):
+# Chosen by a validation-only sweep on MemLeak and Mixed (2 seeds each): the stage-B
+# settings (lr 5e-4, target update 500, 64x64 net) collapsed on Mixed (best val ~30 vs ~105).
+DQN_KWARGS = dict(learning_rate=1e-4, target_update_interval=1000, buffer_size=200_000, batch_size=128,
+                  learning_starts=1000, exploration_fraction=0.2, exploration_final_eps=0.02,
+                  train_freq=4, gradient_steps=1, policy_kwargs=dict(net_arch=[256, 256]))
+DEFAULT_TIMESTEPS = {"PPO": 400_000, "A2C": 400_000, "DQN": 300_000}
+
+
+def train_sb3(algo, config, seed, timesteps, prefix, algo_kwargs=None):
     save_path = os.path.join(MODEL_DIR, prefix)
-    if algo == "PPO":
+    if algo in ("PPO", "A2C"):
         venv = make_vec_env(lambda: CloudSelfHealingEnvV2(config), n_envs=8, seed=seed)
         venv = VecNormalize(venv, norm_obs=True, norm_reward=True, gamma=0.99)
-        model = PPO("MlpPolicy", venv, n_steps=512, batch_size=256, ent_coef=0.01, verbose=0, seed=seed)
+        if algo == "PPO":
+            kwargs = dict(n_steps=512, batch_size=256, ent_coef=0.01, **(algo_kwargs or {}))
+            model = PPO("MlpPolicy", venv, verbose=0, seed=seed, **kwargs)
+        else:
+            kwargs = dict(n_steps=16, ent_coef=0.01, **(algo_kwargs or {}))
+            model = A2C("MlpPolicy", venv, verbose=0, seed=seed, **kwargs)
         cb = TrainCallback(config, save_path, eval_freq=20_000, vecnorm=venv)
     else:
         venv = make_vec_env(lambda: CloudSelfHealingEnvV2(config), n_envs=1, seed=seed)
-        model = DQN("MlpPolicy", venv, target_update_interval=500, learning_rate=5e-4, exploration_fraction=0.3,
-                    learning_starts=1000, batch_size=64, buffer_size=100_000, verbose=0, seed=seed)
+        model = DQN("MlpPolicy", venv, verbose=0, seed=seed, **{**DQN_KWARGS, **(algo_kwargs or {})})
         cb = TrainCallback(config, save_path, eval_freq=10_000)
     model.learn(total_timesteps=timesteps, callback=cb)
     if cb.vecnorm is not None:
@@ -165,10 +174,10 @@ def train_qlearning(config, seed, episodes, prefix):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--algo", choices=["QLearning", "DQN", "PPO"], required=True)
+    parser.add_argument("--algo", choices=["QLearning", "DQN", "PPO", "A2C"], required=True)
     parser.add_argument("--env", choices=list(SCENARIOS), required=True)
     parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--timesteps", type=int, default=None, help="DQN default 200k, PPO default 400k")
+    parser.add_argument("--timesteps", type=int, default=None, help="defaults: DQN 300k, PPO/A2C 400k")
     parser.add_argument("--episodes", type=int, default=3000, help="Q-learning episodes")
     parser.add_argument("--cost_aware", default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("--anti_flapping", default=True, action=argparse.BooleanOptionalAction)
@@ -188,7 +197,7 @@ def main():
     if args.algo == "QLearning":
         rows, val_rows, best = train_qlearning(config, args.seed, args.episodes, prefix)
     else:
-        steps = args.timesteps or (400_000 if args.algo == "PPO" else 200_000)
+        steps = args.timesteps or DEFAULT_TIMESTEPS[args.algo]
         rows, val_rows, best = train_sb3(args.algo, config, args.seed, steps, prefix)
 
     pd.DataFrame(rows).to_csv(os.path.join(RESULT_DIR, f"{prefix}_train.csv"), index=False)

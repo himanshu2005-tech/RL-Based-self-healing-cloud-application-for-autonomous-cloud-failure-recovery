@@ -1,0 +1,149 @@
+{
+  "Low": {
+    "Threshold": {
+      "params": {
+        "up": 0.6,
+        "down": 0.35,
+        "cooldown": 16,
+        "mem": 0.6,
+        "err": 0.01
+      },
+      "val_reward": 169.83166666666673
+    },
+    "HPA+Heal": {
+      "params": {
+        "target_cpu": 0.6,
+        "stabilization": 12,
+        "mem_threshold": 0.6,
+        "err_threshold": 0.01
+      },
+      "val_reward": 170.27333333333337
+    }
+  },
+  "High": {
+    "Threshold": {
+      "params": {
+        "up": 0.6,
+        "down": 0.45,
+        "cooldown": 16,
+        "mem": 0.6,
+        "err": 0.01
+      },
+      "val_reward": 118.91958333333332
+    },
+    "HPA+Heal": {
+      "params": {
+        "target_cpu": 0.6,
+        "stabilization": 12,
+        "mem_threshold": 0.6,
+        "err_threshold": 0.01
+      },
+      "val_reward": 118.5520833333333
+    }
+  },
+  "Bursty": {
+    "Threshold": {
+      "params": {
+        "up": 0.55,
+        "down": 0.2,
+        "cooldown": 4,
+        "mem": 0.6,
+        "err": 0.01
+      },
+      "val_reward": 109.59875000000002
+    },
+    "HPA+Heal": {
+      "params": {
+        "target_cpu": 0.55,
+        "stabilization": 16,
+        "mem_threshold": 0.6,
+        "err_threshold": 0.01
+      },
+      "val_reward": 109.78666666666666
+    }
+  },
+  "MemLeak": {
+    "Threshold": {
+      "params": {
+        "up": 0.6,
+        "down": 0.35,
+        "cooldown": 12,
+        "mem": 0.9,
+        "err": 0.01
+      },
+      "val_reward": 149.97083333333336
+    },
+    "HPA+Heal": {
+      "params": {
+        "target_cpu": 0.6,
+        "stabilization": 16,
+        "mem_threshold": 0.8,
+        "err_threshold": 0.01
+      },
+      "val_reward": 149.77166666666656
+    }
+  },
+  "ErrorBurst": {
+    "Threshold": {
+      "params": {
+        "up": 0.6,
+        "down": 0.35,
+        "cooldown": 12,
+        "mem": 0.6,
+        "err": 0.01
+      },
+      "val_reward": 143.62833333333327
+    },
+    "HPA+Heal": {
+      "params": {
+        "target_cpu": 0.6,
+        "stabilization": 16,
+        "mem_threshold": 0.6,
+        "err_threshold": 0.01
+      },
+      "val_reward": 142.99374999999998
+    }
+  },
+  "Surge": {
+    "Threshold": {
+      "params": {
+        "up": 0.6,
+        "down": 0.25,
+        "cooldown": 0,
+        "mem": 0.6,
+        "err": 0.01
+      },
+      "val_reward": 113.67416666666665
+    },
+    "HPA+Heal": {
+      "params": {
+        "target_cpu": 0.55,
+        "stabilization": 16,
+        "mem_threshold": 0.6,
+        "err_threshold": 0.01
+      },
+      "val_reward": 111.33500000000001
+    }
+  },
+  "Mixed": {
+    "Threshold": {
+      "params": {
+        "up": 0.55,
+        "down": 0.3,
+        "cooldown": 0,
+        "mem": 0.7,
+        "err": 0.01
+      },
+      "val_reward": 109.06441666666665
+    },
+    "HPA+Heal": {
+      "params": {
+        "target_cpu": 0.55,
+        "stabilization": 12,
+        "mem_threshold": 0.7,
+        "err_threshold": 0.01
+      },
+      "val_reward": 108.93541666666663
+    }
+  }
+}

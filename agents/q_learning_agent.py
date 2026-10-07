@@ -20,12 +20,16 @@ class QLearningAgent:
         # feature) and `feature_idx` (which observation entries to use) override the
         # v1 defaults below.
         self.feature_idx = feature_idx
+        # Interior edges only: linspace(lo, hi, num_bins + 1)[1:-1] gives num_bins equal-width
+        # bins. (Including both endpoints left bin 0 unused and the top bin for x == hi only.)
+        def edges(lo, hi):
+            return np.linspace(lo, hi, num_bins + 1)[1:-1]
         self.bins = bins if bins is not None else [
-            np.linspace(0.0, 1.0, num_bins - 1),   # CPU
-            np.linspace(0.0, 1.0, num_bins - 1),   # RAM
-            np.linspace(0.0, 10.0, num_bins - 1),  # Response Time
-            np.linspace(0.0, 1.0, num_bins - 1),   # Error Rate
-            np.linspace(0.0, 1.0, num_bins - 1)    # Request Load
+            edges(0.0, 1.0),    # CPU
+            edges(0.0, 1.0),    # RAM
+            edges(0.0, 10.0),   # Response Time
+            edges(0.0, 1.0),    # Error Rate
+            edges(0.0, 1.0),    # Request Load
         ]
         
         # Q-table shape: one axis per feature (len(edges) + 1 bins each), then actions

@@ -1,0 +1,32 @@
+{
+  "LowTraffic": {
+    "thresholds": {
+      "restart_cpu": 0.6,
+      "restart_err": 0.1,
+      "scale_up_cpu": 0.6,
+      "scale_down": 0.0,
+      "cache_rt": 10.1
+    },
+    "val_reward": 118.619121155065
+  },
+  "HighTraffic": {
+    "thresholds": {
+      "restart_cpu": 0.6,
+      "restart_err": 0.1,
+      "scale_up_cpu": 0.6,
+      "scale_down": 0.0,
+      "cache_rt": 10.1
+    },
+    "val_reward": 117.01398874582446
+  },
+  "BurstyTraffic": {
+    "thresholds": {
+      "restart_cpu": 0.6,
+      "restart_err": 0.1,
+      "scale_up_cpu": 0.6,
+      "scale_down": 0.0,
+      "cache_rt": 10.1
+    },
+    "val_reward": 110.76369117819165
+  }
+}

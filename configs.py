@@ -85,6 +85,12 @@ def make_config(name: str, **overrides) -> EnvConfig:
 
 
 # --- v2 environment (environment/cloud_env_v2.py) ---
+# Fixed episode seeds shared by every method: VAL_SEEDS select checkpoints / tune baselines,
+# evaluate_v2.TEST_SEEDS (10000-10099) are used only for the reported results.
+VAL_SEEDS = range(9000, 9020)
+MODEL_DIR = os.path.join("models", "v2")
+RESULT_DIR = os.path.join("results", "v2")
+
 # Load is measured in replica-capacity units: cpu = load / replicas.
 
 @dataclass(frozen=True)

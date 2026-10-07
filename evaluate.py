@@ -1,5 +1,6 @@
 import os
 import glob
+import json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -15,7 +16,7 @@ from configs import CONFIGS, make_config
 # Configuration
 EVAL_EPISODES = 10
 SEEDS = [1, 2, 3]
-ALGORITHMS = ["RuleBased", "QLearning", "DQN", "PPO"]
+ALGORITHMS = ["RuleBased", "RuleBased (tuned)", "QLearning", "DQN", "PPO"]
 ENV_VARIANTS = ["LowTraffic", "HighTraffic", "BurstyTraffic"]
 ACTIONS = ["Restart", "Scale Up", "Scale Down", "Clear Cache", "Do Nothing"]
 
@@ -70,7 +71,8 @@ def evaluate_agent(agent, env, num_episodes=10, seed_offset=1000):
         "crashes_std": np.std(crashes),
         "flapping_mean": np.mean(flapping),
         "flapping_std": np.std(flapping),
-        "action_dist": action_dist
+        "action_dist": action_dist,
+        "rewards": rewards
     }
 
 def main():
@@ -89,14 +91,20 @@ def main():
             algo_crashes = []
             algo_flapping = []
             algo_action_dist = {0:0, 1:0, 2:0, 3:0, 4:0}
+            algo_episode_rewards = []
             
-            seeds_to_eval = SEEDS if algo != "RuleBased" else [1]
+            seeds_to_eval = [1] if algo.startswith("RuleBased") else SEEDS
             valid_seeds = 0
             
             for seed in seeds_to_eval:
                 agent = None
                 if algo == "RuleBased":
                     agent = RuleBasedAgent()
+                elif algo == "RuleBased (tuned)":
+                    # Thresholds from tune_rule_v1.py (validation episodes 500-519)
+                    if os.path.exists("results/v1_tuned_rule.json"):
+                        with open("results/v1_tuned_rule.json") as f:
+                            agent = RuleBasedAgent(**json.load(f)[env_name]["thresholds"])
                 elif algo == "QLearning":
                     model_path = f"models/QLearning_{env_name}_seed{seed}.pkl"
                     if os.path.exists(model_path):
@@ -117,15 +125,18 @@ def main():
                     algo_healths.append(res["health_mean"])
                     algo_crashes.append(res["crashes_mean"])
                     algo_flapping.append(res["flapping_mean"])
+                    algo_episode_rewards.extend(res["rewards"])
                     for k, v in res["action_dist"].items():
                         algo_action_dist[k] += v
                     valid_seeds += 1
             
             if valid_seeds > 0:
+                # Std across seed means; with a single seed, std over episodes instead
+                reward_std = np.std(algo_rewards) if valid_seeds > 1 else np.std(algo_episode_rewards)
                 summary = {
                     "Environment": env_name,
                     "Algorithm": algo,
-                    "Reward (Mean \u00B1 Std)": f"{np.mean(algo_rewards):.2f} \u00B1 {np.std(algo_rewards):.2f}",
+                    "Reward (Mean \u00B1 Std)": f"{np.mean(algo_rewards):.2f} \u00B1 {reward_std:.2f}",
                     "Health (Mean \u00B1 Std)": f"{np.mean(algo_healths):.3f} \u00B1 {np.std(algo_healths):.3f}",
                     "Crashes (Mean)": f"{np.mean(algo_crashes):.2f}",
                     "Flapping (Mean)": f"{np.mean(algo_flapping):.2f}"
@@ -139,7 +150,7 @@ def main():
                 plt.title(f"Action Distribution - {algo} on {env_name}")
                 plt.ylabel("Frequency")
                 plt.ylim(0, 1)
-                plt.savefig(f"plots/ActionDist_{algo}_{env_name}.png")
+                plt.savefig(f"plots/ActionDist_{algo.replace(' (tuned)', 'Tuned')}_{env_name}.png")
                 plt.close()
 
     df_summary = pd.DataFrame(results_summary)

@@ -4,7 +4,7 @@ Significance tests and figures for the v2 results. Run after evaluate_v2.py.
     python analyze_v2.py
 
 Writes results/v2/significance.csv, plots/v2/learning_curves.png and
-plots/v2/gain_vs_hpa_heal.png.
+plots/v2/gain_vs_best_rule.png.
 
 Tests, per scenario, PPO against every other agent:
   * seed level (the unit of replication for a training algorithm): Welch t-test
@@ -26,18 +26,18 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from agents.baselines import HPAAgent
 from configs import SCENARIOS
 from environment.cloud_env_v2 import CloudSelfHealingEnvV2
 from train_v2 import RESULT_DIR, VAL_SEEDS
 
 PLOT_DIR = os.path.join("plots", "v2")
 REFERENCE = "PPO"
-OTHERS = ["DQN", "QLearning", "HPA+Heal", "HPA"]
-LEARNED = ["PPO", "DQN", "QLearning"]
+OTHERS = ["A2C", "DQN", "QLearning", "Tuned Threshold", "Tuned HPA+Heal", "HPA+Heal"]
+LEARNED = ["PPO", "A2C", "DQN", "QLearning"]
+BEST_RULE = "Tuned HPA+Heal"
 
 # Chart style: validated categorical slots 1-3 (blue, orange, aqua) on the light surface
-COLORS = {"PPO": "#2a78d6", "DQN": "#eb6834", "QLearning": "#1baf7a"}
+COLORS = {"PPO": "#2a78d6", "DQN": "#eb6834", "QLearning": "#1baf7a", "A2C": "#eda100"}
 SURFACE, INK, INK_2, MUTED, GRID, AXIS = "#fcfcfb", "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7"
 
 
@@ -99,19 +99,15 @@ def significance(df):
     return out
 
 
-def hpa_heal_validation(config):
-    env = CloudSelfHealingEnvV2(config)
-    totals = []
-    for s in VAL_SEEDS:
-        agent = HPAAgent(max_replicas=config.max_replicas, heal=True)
-        obs, _ = env.reset(seed=s)
-        done, total = False, 0.0
-        while not done:
-            obs, r, terminated, truncated, _ = env.step(agent.act(obs))
-            total += r
-            done = terminated or truncated
-        totals.append(total)
-    return float(np.mean(totals))
+def best_rules():
+    """Per scenario, the tuned rule with the higher validation reward (chosen without test data)."""
+    from tune_baselines import load_tuned
+    return {env: "Tuned " + max(r, key=lambda k: r[k]["val_reward"]) for env, r in load_tuned().items()}
+
+
+def best_rule_validation():
+    from tune_baselines import load_tuned
+    return {env: max(v["val_reward"] for v in r.values()) for env, r in load_tuned().items()}
 
 
 def style(ax):
@@ -126,9 +122,11 @@ def style(ax):
 
 
 def plot_learning_curves(envs):
+    rule_val = best_rule_validation()
     fig, axes = plt.subplots(2, 4, figsize=(15, 7), facecolor=SURFACE)
     for ax, env_name in zip(axes.flat, envs):
         style(ax)
+        ends = []
         for algo in LEARNED:
             files = sorted(glob.glob(os.path.join(RESULT_DIR, f"{algo}_{env_name}_seed[0-9]_val.csv")))
             if not files:
@@ -139,10 +137,17 @@ def plot_learning_curves(envs):
             y = np.stack([c.val_reward.values[:n] for c in curves])
             ax.fill_between(x, y.min(0), y.max(0), color=COLORS[algo], alpha=0.15, linewidth=0)
             ax.plot(x, y.mean(0), color=COLORS[algo], linewidth=2, label=algo)
-            ax.annotate(algo, (x[-1], y.mean(0)[-1]), xytext=(4, 0), textcoords="offset points",
+            ends.append([y.mean(0)[-1], x[-1], algo])
+        # Direct labels at line ends, pushed apart so they do not overlap
+        lo, hi = ax.get_ylim()
+        gap = 0.06 * (hi - lo)
+        ends.sort(key=lambda e: -e[0])
+        for i in range(1, len(ends)):
+            ends[i][0] = min(ends[i][0], ends[i - 1][0] - gap)
+        for y_end, x_end, algo in ends:
+            ax.annotate(algo, (x_end, y_end), xytext=(4, 0), textcoords="offset points",
                         fontsize=8, color=INK_2, va="center")
-        ref = hpa_heal_validation(SCENARIOS[env_name])
-        ax.axhline(ref, color=MUTED, linewidth=1.5, linestyle=(0, (4, 3)), label="HPA+Heal")
+        ax.axhline(rule_val[env_name], color=MUTED, linewidth=1.5, linestyle=(0, (4, 3)), label="best tuned rule")
         ax.set_title(env_name, fontsize=10, color=INK, loc="left")
         ax.set_xlabel("environment steps (thousands)", fontsize=8, color=MUTED)
         ax.set_ylabel("validation reward", fontsize=8, color=MUTED)
@@ -158,16 +163,18 @@ def plot_learning_curves(envs):
 
 
 def plot_gain(sig, n_episodes):
-    fig, ax = plt.subplots(figsize=(9, 4.8), facecolor=SURFACE)
+    fig, ax = plt.subplots(figsize=(9, 5.6), facecolor=SURFACE)
     style(ax)
     ax.grid(axis="y", visible=False)
     ax.grid(axis="x", color=GRID, linewidth=0.8)
     envs = list(dict.fromkeys(sig.Environment))
-    algos = [("PPO", "PPO vs HPA+Heal"), ("DQN", None), ("QLearning", None)]
-    # Gain of each learned agent over HPA+Heal = (PPO - HPA+Heal) - (PPO - other)
-    base = sig[sig.Comparison == "PPO vs HPA+Heal"].set_index("Environment")
-    for k, (algo, _) in enumerate(algos):
-        ys = np.arange(len(envs)) + (k - 1) * 0.22
+    algos = ["PPO", "A2C", "DQN", "QLearning"]
+    # Gain over the best tuned rule = (PPO - rule) - (PPO - other)
+    rules = best_rules()
+    base = pd.concat([sig[(sig.Environment == e) & (sig.Comparison == f"PPO vs {rules[e]}")] for e in envs])
+    base = base.set_index("Environment")
+    for k, algo in enumerate(algos):
+        ys = np.arange(len(envs)) + (k - 1.5) * 0.18
         if algo == "PPO":
             mid, lo, hi = base.Diff, base["CI Low"], base["CI High"]
         else:
@@ -179,14 +186,14 @@ def plot_gain(sig, n_episodes):
         if algo == "PPO":
             ax.hlines(ys, lo.reindex(envs), hi.reindex(envs), color=COLORS[algo], linewidth=2, zorder=2)
     ax.axvline(0, color=AXIS, linewidth=1.2)
-    ax.set_yticks(np.arange(len(envs)), envs, color=INK_2, fontsize=9)
+    ax.set_yticks(np.arange(len(envs)), [f"{e}\n(vs {rules[e][6:]})" for e in envs], color=INK_2, fontsize=8)
     ax.invert_yaxis()
-    ax.set_xlabel(f"mean test reward minus HPA+Heal (same {n_episodes} episodes); PPO line = 95% bootstrap CI",
+    ax.set_xlabel(f"mean test reward minus the best tuned rule (same {n_episodes} episodes); PPO line = 95% bootstrap CI",
                   fontsize=8, color=MUTED)
-    ax.legend(frameon=False, fontsize=9, labelcolor=INK_2, loc="lower left", bbox_to_anchor=(0, 1.0), ncol=3)
-    ax.set_title("Reward gain over the best rule-based baseline", fontsize=12, color=INK, loc="left", pad=28)
+    ax.legend(frameon=False, fontsize=9, labelcolor=INK_2, loc="lower left", bbox_to_anchor=(0, 1.0), ncol=4)
+    ax.set_title("Reward gain over the best tuned rule-based baseline", fontsize=12, color=INK, loc="left", pad=28)
     fig.tight_layout()
-    fig.savefig(os.path.join(PLOT_DIR, "gain_vs_hpa_heal.png"), dpi=130, facecolor=SURFACE)
+    fig.savefig(os.path.join(PLOT_DIR, "gain_vs_best_rule.png"), dpi=130, facecolor=SURFACE)
     plt.close(fig)
 
 
