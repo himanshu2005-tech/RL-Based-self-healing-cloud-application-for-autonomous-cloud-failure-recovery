@@ -22,7 +22,7 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import VecNormalize
 
 from agents.q_learning_agent import QLearningAgent
-from configs import MODEL_DIR, RESULT_DIR, SCENARIOS, VAL_SEEDS
+from configs import MODEL_DIR, RESULT_DIR, SCENARIOS, VAL_SEEDS, for_split
 from environment.cloud_env_v2 import (
     CloudSelfHealingEnvV2, OBS_CPU, OBS_MEM, OBS_ERR, OBS_REPLICAS, OBS_PENDING, OBS_SINCE_SCALE,
 )
@@ -51,7 +51,7 @@ def make_q_agent(max_replicas):
 
 
 def validate(policy, config):
-    env = CloudSelfHealingEnvV2(config)
+    env = CloudSelfHealingEnvV2(for_split(config, "val"))
     rewards = []
     for s in VAL_SEEDS:
         obs, _ = env.reset(seed=s)

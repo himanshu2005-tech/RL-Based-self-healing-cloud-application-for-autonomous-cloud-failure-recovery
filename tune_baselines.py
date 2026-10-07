@@ -14,7 +14,7 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 
 from agents.baselines import HPAAgent, ThresholdAgent
-from configs import RESULT_DIR, SCENARIOS, VAL_SEEDS
+from configs import RESULT_DIR, SCENARIOS, VAL_SEEDS, for_split
 from environment.cloud_env_v2 import CloudSelfHealingEnvV2
 
 TUNED_FILE = os.path.join(RESULT_DIR, "tuned_baselines.json")
@@ -34,7 +34,7 @@ def make_agent(kind, params, max_replicas):
 
 
 def score(kind, params, config, seeds=VAL_SEEDS):
-    env = CloudSelfHealingEnvV2(config)
+    env = CloudSelfHealingEnvV2(for_split(config, "val"))
     totals = []
     for s in seeds:
         agent = make_agent(kind, params, config.max_replicas)
@@ -67,17 +67,20 @@ def load_tuned():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--jobs", type=int, default=6)
+    parser.add_argument("--envs", nargs="+", default=list(SCENARIOS))
     args = parser.parse_args()
-    jobs = [(e, kind, v) for e in SCENARIOS for kind, grid in GRIDS.items() for v in itertools.product(*grid.values())]
-    results = {e: {} for e in SCENARIOS}
+    jobs = [(e, kind, v) for e in args.envs for kind, grid in GRIDS.items() for v in itertools.product(*grid.values())]
+    results = {e: {} for e in args.envs}
     with ProcessPoolExecutor(args.jobs) as pool:
         for env_name, kind, params, s in pool.map(tune_one, jobs, chunksize=50):
             best = results[env_name].get(kind)
             if best is None or s > best["val_reward"]:
                 results[env_name][kind] = {"params": params, "val_reward": s}
     os.makedirs(RESULT_DIR, exist_ok=True)
+    # Keep previously tuned scenarios that were not re-tuned this time
+    merged = {**(load_tuned() if os.path.exists(TUNED_FILE) else {}), **results}
     with open(TUNED_FILE, "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(merged, f, indent=2)
     for env_name, r in results.items():
         for kind, v in r.items():
             edges = edge_params(kind, v["params"])

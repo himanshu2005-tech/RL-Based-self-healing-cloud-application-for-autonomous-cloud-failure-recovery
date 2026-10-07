@@ -1,3 +1,5 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:865a619b7990b825c28eef05b85ef07ce585f2144f9f3c8e4a39069b49583098
-size 264
+Variant,Reward,Flapping Incidents
+"Cost=True, Flapping=True",119.11 ± 0.75,6.30 ± 0.99
+"Cost=False, Flapping=True",139.63 ± 1.68,12.57 ± 1.62
+"Cost=True, Flapping=False",132.16 ± 0.93,0.00 ± 0.00
+"Cost=False, Flapping=False",177.94 ± 0.50,0.00 ± 0.00

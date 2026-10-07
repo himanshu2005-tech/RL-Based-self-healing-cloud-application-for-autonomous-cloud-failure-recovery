@@ -1,3 +1,16 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:7c8129b0c3c3228119680c27f462669b7711cdceaba2e4e8dc2b53396925dbab
-size 1034
+Environment,Algorithm,Reward (Mean ± Std),Health (Mean ± Std),Crashes (Mean),Flapping (Mean)
+LowTraffic,RuleBased,86.71 ± 7.90,0.575 ± 0.000,0.00,6.10
+LowTraffic,RuleBased (tuned),121.51 ± 10.79,0.717 ± 0.000,0.00,4.20
+LowTraffic,QLearning,94.86 ± 10.15,0.821 ± 0.003,0.00,12.97
+LowTraffic,DQN,118.32 ± 1.44,0.762 ± 0.021,0.00,6.50
+LowTraffic,PPO,119.29 ± 3.79,0.688 ± 0.015,0.00,3.20
+HighTraffic,RuleBased,86.26 ± 8.10,0.574 ± 0.000,0.00,6.20
+HighTraffic,RuleBased (tuned),121.30 ± 11.45,0.716 ± 0.000,0.00,4.20
+HighTraffic,QLearning,90.62 ± 4.07,0.806 ± 0.012,0.00,13.43
+HighTraffic,DQN,116.45 ± 2.69,0.722 ± 0.034,0.00,5.30
+HighTraffic,PPO,114.94 ± 3.77,0.655 ± 0.036,0.00,2.90
+BurstyTraffic,RuleBased,73.92 ± 1.80,0.540 ± 0.000,0.00,7.50
+BurstyTraffic,RuleBased (tuned),110.42 ± 2.05,0.707 ± 0.000,0.00,6.00
+BurstyTraffic,QLearning,93.60 ± 2.19,0.782 ± 0.006,0.00,12.37
+BurstyTraffic,DQN,108.02 ± 1.62,0.724 ± 0.017,0.00,6.83
+BurstyTraffic,PPO,110.18 ± 0.30,0.714 ± 0.016,0.00,6.33

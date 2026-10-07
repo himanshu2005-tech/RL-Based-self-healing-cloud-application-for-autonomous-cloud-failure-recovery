@@ -1,5 +1,6 @@
 import json
 import os
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Dict, Any
 
@@ -102,6 +103,11 @@ class CloudConfig:
     noise: float = 0.08             # OU noise scale (relative)
     ou_theta: float = 0.1           # OU mean-reversion rate
 
+    # Trace-driven load: name of a series in data_analysis/trace/ (empty = synthetic load).
+    # The trace replaces the daily cycle; OU noise and surges still apply on top of it.
+    trace: str = ""
+    trace_split: str = "train"      # "train" / "val" / "test" (environment/trace.py)
+
     # Fault scenarios: per-step probability that a fault starts
     p_leak: float = 0.0             # memory leak, fixed by restart
     p_err: float = 0.0              # error burst, fixed by clear cache (or restart)
@@ -153,4 +159,16 @@ SCENARIOS = {
     "ErrorBurst": CloudConfig(base_load=2.5, p_err=0.03),
     "Surge":      CloudConfig(base_load=2.5, p_surge=0.04),
     "Mixed":      CloudConfig(base_load=3.0, noise=0.12, p_leak=0.015, p_err=0.015, p_surge=0.02),
+    # Load from the Google cluster trace 2011 (Borg), fixed chronological train/val/test split
+    # 8-hour episodes (96 steps) so each split of the ~2.5-day trace holds distinct episodes
+    "Trace":       CloudConfig(base_load=3.5, noise=0.03, trace="google2011_cpu", max_steps=96),
+    "TraceFaults": CloudConfig(base_load=3.0, noise=0.03, trace="google2011_cpu", max_steps=96,
+                               p_leak=0.015, p_err=0.015, p_surge=0.02),
 }
+SYNTHETIC_SCENARIOS = ["Low", "High", "Bursty", "MemLeak", "ErrorBurst", "Surge", "Mixed"]
+TRACE_SCENARIOS = ["Trace", "TraceFaults"]
+
+
+def for_split(config: CloudConfig, split: str) -> CloudConfig:
+    """The same scenario on another part of the trace (no-op for synthetic load)."""
+    return dataclasses.replace(config, trace_split=split) if config.trace else config

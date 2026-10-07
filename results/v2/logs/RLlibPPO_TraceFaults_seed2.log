@@ -1,0 +1,26 @@
+Training RLlibPPO_TraceFaults_seed2
+Token authentication is enabled for this Ray cluster. Set RAY_AUTH_MODE=disabled to opt out. For more information, see https://docs.ray.io/en/latest/ray-security/token-auth.html
+2026-10-08 01:50:59,230	WARNING algorithm_config.py:5160 -- You are running PPO on the new API stack! This is the new default behavior for this algorithm. If you don't want to use the new API stack, set `config.api_stack(enable_rl_module_and_learner=False,enable_env_runner_and_connector_v2=False)`. For a detailed migration guide, see here: https://docs.ray.io/en/master/rllib/new-api-stack-migration-guide.html
+DeprecationWarning: `RLModule(config=[RLModuleConfig object])` has been deprecated. Use `RLModule(observation_space=.., action_space=.., inference_only=.., model_config=.., catalog_class=..)` instead. This will raise an error in the future!
+Install gputil for GPU system monitoring.
+    20488 steps  val     1.6
+    40975 steps  val    24.9
+    61463 steps  val     8.7
+    81949 steps  val    30.1
+   102437 steps  val    32.7
+   122922 steps  val    21.1
+   143409 steps  val    36.7
+   163896 steps  val    36.7
+   180284 steps  val    41.7
+   200772 steps  val    52.6
+   221257 steps  val    52.8
+   241740 steps  val    53.1
+   262220 steps  val    55.5
+   282700 steps  val    55.1
+   303183 steps  val    53.7
+   323671 steps  val    55.1
+   340059 steps  val    54.2
+   360546 steps  val    53.3
+   381031 steps  val    54.6
+   401519 steps  val    54.8
+Done RLlibPPO_TraceFaults_seed2: best validation reward 55.5

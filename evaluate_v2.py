@@ -20,13 +20,17 @@ from stable_baselines3 import A2C, DQN, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from agents.baselines import HoldAgent, HPAAgent, ThresholdAgent
-from configs import SCENARIOS
+from configs import SCENARIOS, SYNTHETIC_SCENARIOS, for_split
 from environment.cloud_env_v2 import CloudSelfHealingEnvV2, ACTION_NAMES
 from train_v2 import MODEL_DIR, RESULT_DIR, make_q_agent, run_prefix
 
 TEST_SEEDS = range(10_000, 10_100)
 BASELINES = ["Hold", "HPA", "HPA+Heal", "Tuned HPA+Heal", "Tuned Threshold"]
 LEARNED = ["QLearning", "DQN", "A2C", "PPO"]
+RLLIB = ["RLlib PPO"]
+MULTI_AGENT = ["MA separate", "MA separate+comm", "MA shared", "MA shared+comm"]
+MA_VARIANTS = {"MA separate": ("separate", False), "MA separate+comm": ("separate", True),
+               "MA shared": ("shared", False), "MA shared+comm": ("shared", True)}
 
 
 ABLATION_VARIANTS = [(True, True), (False, True), (True, False), (False, False)]
@@ -63,8 +67,58 @@ def load_policy(algo, env_name, seed, config, cost_aware=True, anti_flapping=Tru
     return lambda obs: int(model.predict(obs, deterministic=True)[0])
 
 
+def load_rllib(algo, env_name, seed):
+    """Greedy policy for an RLlib model: obs -> action (single) or obs dict -> action dict (multi)."""
+    from ray.rllib.core.rl_module.rl_module import RLModule
+    from train_rllib import RLLIB_DIR, greedy, ma_policy_fn, run_prefix
+    if algo == "RLlib PPO":
+        prefix, ids, policy, comm = run_prefix("single", env_name, seed), ["default_policy"], None, None
+    else:
+        policy, comm = MA_VARIANTS[algo]
+        prefix = run_prefix("multi", env_name, seed, policy, comm)
+        ids = ["shared"] if policy == "shared" else ["scaler", "healer"]
+    path = os.path.abspath(os.path.join(RLLIB_DIR, prefix))
+    if not all(os.path.exists(os.path.join(path, m)) for m in ids):
+        return None
+    modules = {m: RLModule.from_checkpoint(os.path.join(path, m)) for m in ids}
+    if algo == "RLlib PPO":
+        return greedy(modules["default_policy"])
+    return ma_policy_fn(modules, policy), comm
+
+
+def run_episodes_ma(act, comm, env_name):
+    from environment.multi_agent_env import MultiAgentCloudEnv, SCALER_ACTIONS, HEALER_ACTIONS
+    env = MultiAgentCloudEnv({"scenario": env_name, "split": "test", "communicate": comm})
+    rows = []
+    for s in TEST_SEEDS:
+        obs, _ = env.reset(seed=s)
+        reward, sla, replicas, steps = 0.0, 0, 0.0, 0
+        actions = np.zeros(5)
+        while True:
+            a = act(obs)
+            scale, heal = SCALER_ACTIONS[a["scaler"]], HEALER_ACTIONS[a["healer"]]
+            actions[scale] += scale != 4
+            actions[heal] += heal != 4
+            actions[4] += scale == 4 and heal == 4
+            obs, _, done, trunc, info = env.step(a)
+            i = info["scaler"]
+            reward += i["raw_reward"]
+            sla += int(i["sla_ok"])
+            replicas += i["replicas"]
+            steps += 1
+            if done["__all__"] or trunc["__all__"]:
+                break
+        rows.append({
+            "episode_seed": s, "reward": reward, "sla_violation": 1 - sla / steps,
+            "mean_replicas": replicas / steps, "crashes": env.env.crashes,
+            "flapping_incidents": env.env.flapping_incidents, "length": steps,
+            **{f"act_{n}": actions[i] / steps for i, n in enumerate(ACTION_NAMES)},
+        })
+    return rows
+
+
 def run_episodes(make_policy, config):
-    env = CloudSelfHealingEnvV2(config)
+    env = CloudSelfHealingEnvV2(for_split(config, "test"))
     rows = []
     for s in TEST_SEEDS:
         policy = make_policy()  # fresh agent state (HPA history) per episode
@@ -133,15 +187,31 @@ def evaluate_ablation(env_name, seeds):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3, 4, 5])
-    parser.add_argument("--envs", nargs="+", default=list(SCENARIOS))
+    parser.add_argument("--envs", nargs="+", default=SYNTHETIC_SCENARIOS)
     parser.add_argument("--ablation-env", default=None)
+    parser.add_argument("--algos", nargs="+", default=None, help="default: all baselines and SB3 agents")
+    parser.add_argument("--tag", default="", help="output name suffix, e.g. 'trace'")
     args = parser.parse_args()
+    algos = args.algos or BASELINES + LEARNED
+    suffix = f"_{args.tag}" if args.tag else ""
     pd.set_option("display.width", 250)
 
     rows = []
     for env_name in args.envs:
         config = SCENARIOS[env_name]
-        for algo in BASELINES + LEARNED:
+        for algo in algos:
+            if algo in RLLIB + MULTI_AGENT:
+                for seed in args.seeds:
+                    loaded = load_rllib(algo, env_name, seed)
+                    if loaded is None:
+                        print(f"  missing model: {algo} {env_name} seed {seed}")
+                        continue
+                    if algo in MULTI_AGENT:
+                        result = run_episodes_ma(*loaded, env_name)
+                    else:
+                        result = run_episodes(lambda: loaded, config)
+                    rows += [{"Environment": env_name, "Algorithm": algo, "train_seed": seed, **r} for r in result]
+                continue
             # Baselines are deterministic, so one "seed" is enough
             for seed in ([0] if algo in BASELINES else args.seeds):
                 policy = load_policy(algo, env_name, seed, config)
@@ -158,9 +228,9 @@ def main():
 
     os.makedirs(RESULT_DIR, exist_ok=True)
     episodes = pd.DataFrame(rows)
-    episodes.to_csv(os.path.join(RESULT_DIR, "evaluation_episodes.csv"), index=False)
+    episodes.to_csv(os.path.join(RESULT_DIR, f"evaluation{suffix}_episodes.csv"), index=False)
     summary = summarize(episodes)
-    summary.to_csv(os.path.join(RESULT_DIR, "evaluation_summary.csv"), index=False)
+    summary.to_csv(os.path.join(RESULT_DIR, f"evaluation{suffix}_summary.csv"), index=False)
     print(summary.to_string(index=False))
 
     if args.ablation_env:

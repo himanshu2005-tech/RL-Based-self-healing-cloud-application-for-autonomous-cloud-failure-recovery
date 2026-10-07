@@ -14,9 +14,16 @@ The project has two environments:
 v1 was replaced after a review showed that in v1 a one-line rule ("restart if cpu > 0.6")
 matched every trained agent (see [v1 results](#v1-results-original-environment)).
 
+The v2 environment comes in two flavours:
+- **Synthetic load:** 7 scenarios.
+- **Real Borg load:** 2 scenarios driven by the Google cluster trace.
+
+Agents are trained with Stable-Baselines3 and RLlib. RLlib also trains the multi-agent
+setup: a *scaler* agent and a *healer* agent, with and without communication.
+
 ## Setup
 
-Requires Git LFS (models, datasets and result CSVs are stored in LFS) and Python 3.11–3.13.
+Requires Git LFS (models and the 2019 Borg sample are stored in LFS) and Python 3.11–3.13.
 
 ```powershell
 git lfs install
@@ -26,24 +33,37 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
-pytest                      # 25 environment and agent tests
+pytest                      # 33 environment, agent, trace and multi-agent tests
 ```
+
+`requirements.txt` pins one stack for everything: `ray[rllib]==2.59.0` (RLlib needs
+`gymnasium==1.2.2`), with `stable-baselines3==2.9.0`, which supports gymnasium 1.x.
+Models trained earlier with gymnasium 0.29 / SB3 2.3 load and reproduce their results
+exactly on this stack.
 
 ## Reproducing the results
 
 ```powershell
-# Train PPO, A2C, DQN and Q-learning on all 7 scenarios x 5 seeds, plus the PPO ablation,
-# tune the rule baselines, then evaluate everything on the shared test episodes
+# Synthetic scenarios: train PPO, A2C, DQN and Q-learning on 7 scenarios x 5 seeds plus the
+# PPO ablation, tune the rule baselines, evaluate on the shared test episodes
 python run_v2_experiments.py --seeds 1 2 3 4 5 --jobs 6 --ablation-env Mixed
-# Significance tests and figures
 python analyze_v2.py
+
+# Borg-trace scenarios, RLlib and multi-agent
+python data_analysis/fetch_google_trace.py --parts 0 36     # downloads ~3 GB, keeps 19 MB
+python run_trace_experiments.py --seeds 1 2 3 4 5          # build series, tune, train, evaluate, analyse
 ```
 
-- **Single training run:** `python train_v2.py --algo PPO --env Mixed --seed 1`
-- **Tune the rule baselines only:** `python tune_baselines.py`
-- **Outputs:** `models/v2/`, `results/v2/` and `plots/v2/`
-- **Runtime:** the full grid takes about 6 hours with 6 parallel jobs on a 16-thread
-  laptop CPU. DQN is the slowest algorithm.
+- **Single training runs:**
+  - `python train_v2.py --algo PPO --env Mixed --seed 1` (Stable-Baselines3)
+  - `python train_rllib.py --mode single --env TraceFaults --seed 1` (RLlib PPO)
+  - `python train_rllib.py --mode multi --policy separate --comm --env TraceFaults --seed 1` (multi-agent)
+- **Outputs:** `models/v2/` (RLlib modules in `models/v2/rllib/`), `results/v2/` and
+  `plots/v2/`.
+- **Runtime, on a 16-thread laptop CPU:**
+  - synthetic grid: about 6 hours
+  - trace grid: about 2.5 hours
+  - DQN is the slowest algorithm.
 
 ## The v2 environment
 
@@ -85,8 +105,45 @@ A replicated service with a time-varying load, one decision every 5 simulated mi
   - load and load trend
   - steps since the last scale, the last scale direction, and steps since the last restart
 
-**Scenarios** (`configs.py`): Low, High and Bursty traffic with no faults; MemLeak,
-ErrorBurst and Surge with a single fault type; and Mixed, with all three.
+**Synthetic scenarios** (`configs.py`): Low, High and Bursty traffic with no faults;
+MemLeak, ErrorBurst and Surge with a single fault type; and Mixed, with all three.
+
+### Borg-trace scenarios
+
+**Trace** and **TraceFaults** replace the synthetic daily cycle with real cluster demand
+from the **Google cluster trace 2011** (Borg, `task_usage` table):
+
+- **Source data.** `data_analysis/fetch_google_trace.py` downloads parts 0–35 and reduces
+  each to 5-minute CPU totals per job. `data_analysis/build_trace_series.py` sums them into
+  the cluster's CPU demand per window: **600 windows (2.08 days), no gaps.** The demand
+  varies from 0.70× to 1.40× its mean, and the lag-1 autocorrelation is 0.93.
+- **Load.** `load = base_load × trace[t]`, normalised to mean 1 on the training split,
+  with small mean-reverting noise (σ = 0.03) and, in TraceFaults, the same faults as
+  Mixed.
+- **Fixed chronological split, the same for every method:** first 50% for training, next
+  20% for validation (checkpoint selection and baseline tuning), last 30% for testing.
+  Each episode starts at a seeded random offset inside its split. Episodes are 96 steps
+  (8 hours), so each split holds distinct episodes.
+
+**Why not the 2019 Borg sample in `dataset/`?** It can't be used as a load trace. Hourly
+CPU totals have essentially zero autocorrelation at every lag (1 h to 1 week), and the
+number of sampled rows per hour is just as random. The sample was not drawn uniformly over
+time, so it carries no real demand pattern.
+
+### Multi-agent environment (`environment/multi_agent_env.py`, RLlib `MultiAgentEnv`)
+
+Two agents act at the same time on the same service and share the team reward:
+- **scaler:** hold / scale up / scale down
+- **healer:** hold / restart / clear cache
+
+Each observation has three parts:
+- the 11 service metrics
+- a one-hot agent id, so one *shared* policy can drive both agents
+- **with communication:** the other agent's previous action, as a one-hot message
+  (zeros without communication, so every variant has the same input size)
+
+There are four variants: separate or shared policies, each with or without
+communication.
 
 ## Agents
 
@@ -101,15 +158,18 @@ ErrorBurst and Surge with a single fault type; and Mixed, with all three.
 | DQN | Stable-Baselines3 DQN, 256×256 network, 300k steps | Settings chosen by a validation sweep |
 | A2C | Stable-Baselines3 A2C (8 parallel envs, observation and reward normalisation), 400k steps | – |
 | PPO | Stable-Baselines3 PPO (8 parallel envs, observation and reward normalisation), 400k steps | – |
+| RLlib PPO | RLlib PPO (new API stack), 64×64 network, reward scale 0.1, 400k steps | – |
+| MA separate / shared (± comm) | RLlib PPO for the scaler + healer env: separate policies, or one shared policy; with or without communication | – |
 
 **Same data and the same selection rule for every method:**
 - **Validation (20 fixed episodes, seeds 9000–9019).** Each learned agent keeps its best
   checkpoint on these episodes, and each rule baseline is grid-searched on the same ones.
+  On the trace scenarios these episodes come from the validation split of the trace.
 - **Test (100 fixed episodes, seeds 10000–10099).** Every agent is scored on these, and
   they are used for nothing else.
 - **Training** uses different episodes again.
 
-## Results (v2, 5 training seeds × 100 test episodes)
+## Results: synthetic scenarios (v2, 5 training seeds × 100 test episodes)
 
 ### Reward
 
@@ -294,6 +354,127 @@ grid:
 
 So the tuned baselines are at their optimum for these rule families.
 
+## Results: Borg trace, RLlib and multi-agent (5 seeds × 100 test episodes)
+
+The rule baselines were tuned on the trace's validation split, and every agent is scored
+on the same 100 test episodes, all drawn from the last 30% of the trace (unseen in
+training). Rewards are lower than in the synthetic scenarios because trace episodes are
+96 steps, not 200. Full tables: `results/v2/evaluation_trace_summary.csv` and
+`results/v2/significance_trace.csv`.
+
+### Trace (real Borg load, no faults)
+
+| Agent | Seeds | Reward | Seed std | SLA violation % | Replicas | Crashes / ep | Flaps / ep |
+|---|---|---|---|---|---|---|---|
+| Hold | 1 | 59.0 ± 12.8 | – | 11.3 | 6.54 | 0.00 | 0.00 |
+| HPA | 1 | 63.4 ± 2.5 | – | 2.0 | 6.90 | 0.00 | 4.95 |
+| Tuned HPA+Heal | 1 | 64.0 ± 2.6 | – | 3.6 | 6.99 | 0.00 | 0.78 |
+| Tuned Threshold | 1 | 65.0 ± 2.4 | – | 3.1 | 6.99 | 0.00 | 0.03 |
+| QLearning | 5 | **65.4 ± 2.9** | 1.8 | 2.2 | 6.91 | 0.00 | 1.15 |
+| DQN | 5 | 64.9 ± 2.4 | 0.2 | 3.7 | 6.75 | 0.00 | 0.58 |
+| A2C | 5 | 62.1 ± 9.3 | 2.7 | 7.3 | 6.66 | 0.00 | 0.34 |
+| PPO (SB3) | 5 | 65.2 ± 2.9 | 0.3 | 3.5 | 6.85 | 0.00 | 0.10 |
+| RLlib PPO | 5 | 59.3 ± 12.1 | 0.6 | 11.0 | 6.55 | 0.00 | 0.00 |
+
+### TraceFaults (real Borg load + memory leaks, error bursts, surges)
+
+| Agent | Seeds | Reward | Seed std | SLA violation % | Replicas | Crashes / ep | Flaps / ep |
+|---|---|---|---|---|---|---|---|
+| Hold | 1 | −4.6 ± 22.8 | – | 62.0 | 5.62 | 0.67 | 0.00 |
+| HPA | 1 | −2.4 ± 27.6 | – | 50.4 | 7.19 | 0.62 | 3.09 |
+| HPA+Heal | 1 | 51.8 ± 9.0 | – | 11.9 | 7.28 | 0.00 | 4.88 |
+| Tuned HPA+Heal | 1 | 53.2 ± 9.0 | – | 10.4 | 7.83 | 0.00 | 0.99 |
+| Tuned Threshold | 1 | **54.2 ± 8.5** | – | 10.2 | 7.63 | 0.00 | 1.13 |
+| QLearning | 5 | 35.5 ± 20.8 | 5.7 | 27.4 | 6.33 | 0.06 | 9.55 |
+| DQN | 5 | 48.0 ± 16.1 | 9.4 | 12.8 | 7.31 | 0.12 | 0.90 |
+| A2C | 5 | 52.6 ± 8.6 | 0.5 | 9.9 | 7.93 | 0.00 | 1.50 |
+| PPO (SB3) | 5 | 53.7 ± 8.3 | 0.4 | 9.6 | 7.81 | 0.00 | 1.33 |
+| RLlib PPO | 5 | 51.1 ± 9.5 | 1.0 | 10.0 | 8.62 | 0.00 | 0.18 |
+| MA separate | 5 | 50.0 ± 11.1 | 1.3 | 10.3 | 8.75 | 0.01 | 0.00 |
+| MA separate+comm | 5 | 50.4 ± 10.2 | 0.5 | 9.6 | 8.83 | 0.00 | 0.13 |
+| MA shared | 5 | 49.3 ± 12.0 | 1.1 | 10.5 | 8.86 | 0.02 | 0.08 |
+| MA shared+comm | 5 | 49.0 ± 11.4 | 1.0 | 10.3 | 9.04 | 0.01 | 0.12 |
+
+### Significance
+
+Same tests as for the synthetic scenarios, Holm-corrected across these 20 comparisons.
+"Significant" means p < 0.05 in both tests.
+
+| Scenario | Comparison | Reward diff [95% CI] | p seed | p episode | Significant |
+|---|---|---|---|---|---|
+| Trace | PPO vs A2C | +3.1 [0.6, 6.0] | 0.9 | <0.0001 | no |
+| Trace | PPO vs DQN | +0.2 [−0.4, 0.7] | 1 | 0.025 | no |
+| Trace | PPO vs QLearning | −0.3 [−1.6, 1.6] | 1 | 1 | no |
+| Trace | PPO vs RLlib PPO | +5.9 [4.0, 8.2] | <0.0001 | <0.0001 | **yes** |
+| Trace | PPO vs Tuned Threshold | +0.2 [−0.3, 0.6] | 1 | 0.4 | no |
+| Trace | PPO vs Tuned HPA+Heal | +1.2 [0.5, 1.8] | 0.039 | 0.0001 | **yes** |
+| TraceFaults | PPO vs A2C | +1.0 [0.1, 1.9] | 0.17 | 0.0001 | no |
+| TraceFaults | PPO vs DQN | +5.7 [0.3, 15.6] | 1 | <0.0001 | no |
+| TraceFaults | PPO vs QLearning | +18.1 [13.1, 24.3] | 0.05 | <0.0001 | **yes** |
+| TraceFaults | PPO vs RLlib PPO | +2.6 [1.3, 4.0] | 0.077 | <0.0001 | no |
+| TraceFaults | PPO vs Tuned Threshold | −0.5 [−1.5, 0.4] | 0.77 | 0.83 | no |
+| TraceFaults | PPO vs Tuned HPA+Heal | +0.4 [−0.5, 1.5] | 0.9 | 1 | no |
+| TraceFaults | MA separate+comm vs MA separate | +0.4 [−1.0, 2.0] | 1 | 1 | no |
+| TraceFaults | MA shared+comm vs MA shared | −0.3 [−1.9, 1.3] | 1 | 0.51 | no |
+| TraceFaults | MA shared+comm vs MA separate+comm | −1.4 [−3.0, −0.1] | 0.52 | 0.0006 | no |
+| TraceFaults | MA shared vs MA separate | −0.7 [−2.6, 1.1] | 1 | 0.28 | no |
+| TraceFaults | MA separate+comm vs RLlib PPO | −0.7 [−2.0, 0.5] | 1 | 0.19 | no |
+| TraceFaults | MA shared+comm vs RLlib PPO | −2.1 [−3.9, −0.6] | 0.23 | <0.0001 | no |
+| TraceFaults | MA separate+comm vs Tuned HPA+Heal | −2.8 [−4.1, −1.6] | 0.0076 | 0.0001 | **yes** |
+| TraceFaults | MA shared+comm vs Tuned HPA+Heal | −4.3 [−6.0, −2.8] | 0.019 | <0.0001 | **yes** |
+
+### Figures
+
+![Trace learning curves](plots/v2/trace_learning_curves.png)
+
+![Multi-agent learning curves](plots/v2/multi_agent_learning_curves.png)
+
+![TraceFaults ranking](plots/v2/ranking_TraceFaults.png)
+
+### Findings
+
+1. **On real Borg demand, the best learned agents tie the tuned rules.**
+   - SB3 PPO is within 0.5 reward of the best tuned rule in both trace scenarios, with no
+     significant difference. It significantly beats only the weaker Tuned HPA+Heal on
+     Trace (+1.2).
+   - This repeats the synthetic finding: once the rules are tuned on the same validation
+     data, RL matches them rather than beating them.
+2. **Communication between the agents makes no measurable difference.** With vs without
+   the message channel: +0.4 for separate policies and −0.3 for shared, neither
+   significant.
+   - The shared system state already shows each agent what the other did (replica count,
+     memory, errors), so an explicit message adds little.
+   - Separate policies are slightly better than one shared policy (−0.7 to −1.4 for
+     shared), but not significantly.
+3. **Splitting control into two agents costs a little but doesn't help.**
+   - The best multi-agent variant (separate+comm, 50.4) is level with single-agent RLlib
+     PPO (51.1, no significant difference).
+   - It is significantly below the tuned rule (−2.8). Coordinating two learners on one
+     team reward is harder than one learner with all five actions.
+   - The multi-agent policies also over-provision: about 8.8–9.0 replicas vs 7.6–7.8 for
+     PPO and the rules.
+4. **The two frameworks disagree.** SB3 PPO beats RLlib PPO by 5.9 on Trace (significant)
+   and by 2.6 on TraceFaults.
+   - On Trace, every RLlib PPO seed learned to always Hold. That scores 68.8 on the
+     validation split (as good as the rules there), but the test split's load is higher
+     (mean 1.05 vs 0.97), and never scaling costs about 6 points.
+   - SB3's PPO normalises observations and rewards; the RLlib setup only scales rewards.
+     That difference most likely explains the gap.
+   - Checkpoint selection on a calm validation period cannot tell a passive policy from a
+     good one, a limitation of this protocol on a short trace.
+5. **Faults make the deep-RL ranking clearer.**
+   - Q-learning collapses on TraceFaults (35.5, 27% SLA violations).
+   - DQN is unstable again: one seed scored 34 on validation, and the seed-to-seed std is
+     9.4.
+   - PPO and A2C are stable (seed std ≤ 0.5).
+
+**Limitations of this stage:**
+- Only 2.08 days of trace. The download was cut short by an internet outage, so 600
+  five-minute windows support 8-hour episodes but not full days.
+- RLlib used library-default PPO settings, with no hyperparameter search and no
+  observation normalisation.
+- No comparison yet with published results from autoscaling / self-healing RL papers.
+
 ## v1 results (original environment)
 
 Kept for reference (`python evaluate.py`; 3 seeds × 10 episodes; std across seed means,
@@ -337,19 +518,23 @@ or across episodes for the single-seed rule rows).
 ```
 configs.py                  v1 EnvConfig + make_config(); v2 CloudConfig, SCENARIOS, seeds and paths
 environment/cloud_env.py    v1 environment (frozen)
-environment/cloud_env_v2.py v2 environment
+environment/cloud_env_v2.py v2 environment (synthetic or trace-driven load; joint scale + heal step)
+environment/trace.py        Borg trace series loader and the fixed train/val/test split
+environment/multi_agent_env.py  RLlib MultiAgentEnv: scaler + healer, optional communication
 agents/baselines.py         Hold, HPA, HPA+Heal, ThresholdAgent (act on the observation only)
 agents/q_learning_agent.py  tabular Q-learning (v1 defaults, custom bins for v2)
 agents/rule_based_agent.py  v1 threshold rule (tunable thresholds)
-train_v2.py                 train QLearning / DQN / A2C / PPO on a v2 scenario
+train_v2.py                 train QLearning / DQN / A2C / PPO (Stable-Baselines3) on a v2 scenario
+train_rllib.py              train RLlib PPO: single-agent or multi-agent (separate/shared, comm on/off)
 tune_baselines.py           grid-search the v2 rule baselines on the validation episodes
-evaluate_v2.py              shared-episode evaluation + reward ablation
-analyze_v2.py               significance tests and figures
-run_v2_experiments.py       parallel training grid, baseline tuning and evaluation
+evaluate_v2.py              shared-episode evaluation (SB3, RLlib, multi-agent) + reward ablation
+analyze_v2.py               significance tests and figures (--tag trace for the trace stage)
+run_v2_experiments.py       synthetic grid: training, baseline tuning and evaluation
+run_trace_experiments.py    trace grid: series, tuning, SB3 + RLlib + multi-agent training, evaluation
 tune_rule_v1.py             tune the v1 rule thresholds
-tests/                      pytest tests for the v2 environment and the agents
+tests/                      pytest tests: v2 env, agents, trace split, multi-agent env
 train_*.py, evaluate.py     v1 pipeline
-data_analysis/              Borg trace calibration (v1)
+data_analysis/              Borg data: 2011 trace download + series builder; 2019 sample calibration (v1)
 ```
 
 ## Roadmap
@@ -361,7 +546,11 @@ data_analysis/              Borg trace calibration (v1)
       learning curves
 - [x] Tuned threshold and HPA baselines, stable DQN, A2C; v1 rule thresholds, Q-learning
       bins and training metrics fixed
-- [ ] Drive the load from the Google Borg trace, with a fixed train/test split
-- [ ] Port to RLlib (needs gymnasium 1.x and stable-baselines3 ≥ 2.4)
-- [ ] Multi-agent RLlib env: a scaler agent and a healer agent, with separate and shared
-      policies
+- [x] Drive the load from the Google Borg trace (2011), with a fixed train/val/test split
+- [x] Port to RLlib (gymnasium 1.2.2, stable-baselines3 2.9, Ray 2.59 in one environment)
+- [x] Multi-agent RLlib env: scaler + healer agents, separate and shared policies, with and
+      without communication
+- [ ] Longer trace (the full 29 days, or several weeks) with day-long episodes
+- [ ] Tune RLlib PPO (observation normalisation, learning rate, entropy) and the
+      multi-agent setup
+- [ ] Compare with published autoscaling / self-healing RL results

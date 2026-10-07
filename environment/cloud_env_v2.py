@@ -6,6 +6,7 @@ import numpy as np
 from gymnasium import spaces
 
 from configs import CloudConfig
+from environment import trace as trace_data
 
 RESTART, SCALE_UP, SCALE_DOWN, CLEAR_CACHE, HOLD = range(5)
 ACTION_NAMES = ["Restart", "Scale Up", "Scale Down", "Clear Cache", "Hold"]
@@ -30,6 +31,12 @@ class CloudSelfHealingEnvV2(gym.Env):
     def __init__(self, config: CloudConfig = CloudConfig()):
         super().__init__()
         self.config = config
+        if config.trace:
+            self.series = trace_data.load_series(config.trace)
+            lo, hi = trace_data.split_bounds(len(self.series), config.trace_split)
+            # An episode (max_steps + 1 windows) must fit inside its split
+            self.trace_starts = (lo, hi - config.max_steps - 1)
+            assert self.trace_starts[1] > lo, "trace split shorter than an episode"
         self.action_space = spaces.Discrete(5)
         self.observation_space = spaces.Box(0.0, 2.0, shape=(OBS_DIM,), dtype=np.float32)
 
@@ -38,8 +45,11 @@ class CloudSelfHealingEnvV2(gym.Env):
     def _next_load(self):
         c = self.config
         self.ou += -c.ou_theta * self.ou + c.noise * self.np_random.normal()
-        daily = 1.0 + c.daily_amp * math.sin(2 * math.pi * self.t / c.daily_period + self.phase)
-        return max(0.05, c.base_load * daily * (1.0 + self.ou) * self.surge_mult)
+        if c.trace:
+            level = self.series[self.trace_start + self.t]
+        else:
+            level = 1.0 + c.daily_amp * math.sin(2 * math.pi * self.t / c.daily_period + self.phase)
+        return max(0.05, c.base_load * level * (1.0 + self.ou) * self.surge_mult)
 
     def _update_metrics(self, capacity):
         cold = self.config.cold_cache_load if self.cold_cache_left > 0 else 1.0
@@ -73,6 +83,8 @@ class CloudSelfHealingEnvV2(gym.Env):
         c = self.config
         self.t = 0
         self.phase = self.np_random.uniform(0, 2 * math.pi)
+        if c.trace:
+            self.trace_start = int(self.np_random.integers(*self.trace_starts))
         self.ou = 0.0
         self.surge_left, self.surge_peak, self.surge_mult = 0, 1.0, 1.0
         self.leaking, self.leak, self.err_burst = False, 0.0, 0.0
@@ -90,44 +102,53 @@ class CloudSelfHealingEnvV2(gym.Env):
         return self._obs(), {}
 
     def step(self, action):
-        c = self.config
         a = int(action)
+        scale = a if a in (SCALE_UP, SCALE_DOWN) else HOLD
+        heal = a if a in (RESTART, CLEAR_CACHE) else HOLD
+        return self.step_joint(scale, heal)
+
+    def step_joint(self, scale_action, heal_action):
+        """One step with a scaling action (SCALE_UP / SCALE_DOWN / HOLD) and a healing action
+        (RESTART / CLEAR_CACHE / HOLD) taken together. step() is the single-action case."""
+        c = self.config
         self.t += 1
 
-        # Actions
+        # Healing action
         action_cost, lost_capacity = 0.0, 0.0
-        if a == RESTART:
+        if heal_action == RESTART:
             # Rolling restart: one replica out of rotation for this step
             self.leaking, self.leak, self.err_burst = False, 0.0, 0.0
             lost_capacity, action_cost = 1.0, c.c_restart
-        elif a == SCALE_UP:
-            if self.replicas + len(self.pending) < c.max_replicas:
-                self.pending.append(self.t + c.provision_delay)
-            action_cost = c.c_scale
-        elif a == SCALE_DOWN:
-            if self.replicas > 1:
-                self.replicas -= 1
-            action_cost = c.c_scale
-        elif a == CLEAR_CACHE:
+        elif heal_action == CLEAR_CACHE:
             # Fixes a bad-cache error burst but not a heap leak; the cache starts cold
             self.err_burst = 0.0
             self.cold_cache_left = c.cold_cache_steps + 1
             action_cost = c.c_cache
+        # Scaling action
+        if scale_action == SCALE_UP:
+            if self.replicas + len(self.pending) < c.max_replicas:
+                self.pending.append(self.t + c.provision_delay)
+            action_cost += c.c_scale
+        elif scale_action == SCALE_DOWN:
+            if self.replicas > 1:
+                self.replicas -= 1
+            action_cost += c.c_scale
         while self.pending and self.pending[0] <= self.t:
             self.pending.popleft()
             self.replicas += 1
 
         # Flapping: scaling against the previous direction, or a second restart, within the window
-        flap = False
-        if a in (SCALE_UP, SCALE_DOWN):
-            if self.last_scale_dir is not None and self.last_scale_dir != a and self.t - self.last_scale_t < c.flap_window:
-                flap = True
-            self.last_scale_dir, self.last_scale_t = a, self.t
-        elif a == RESTART:
-            flap = self.t - self.last_restart_t < c.flap_window
+        flaps = 0
+        if scale_action in (SCALE_UP, SCALE_DOWN):
+            if (self.last_scale_dir is not None and self.last_scale_dir != scale_action
+                    and self.t - self.last_scale_t < c.flap_window):
+                flaps += 1
+            self.last_scale_dir, self.last_scale_t = scale_action, self.t
+        if heal_action == RESTART:
+            flaps += int(self.t - self.last_restart_t < c.flap_window)
             self.last_restart_t = self.t
-        if flap:
-            self.flapping_incidents += 1
+        self.flapping_incidents += flaps
+        flap = flaps > 0
 
         # Faults
         if not self.leaking and self.np_random.random() < c.p_leak:
@@ -158,8 +179,8 @@ class CloudSelfHealingEnvV2(gym.Env):
         reward = float(sla_ok) - replica_cost
         if c.cost_aware:
             reward -= action_cost
-        if c.anti_flapping and flap:
-            reward -= c.c_flap
+        if c.anti_flapping:
+            reward -= c.c_flap * flaps
         if crash:
             self.crashes += 1
             reward -= c.crash_penalty

@@ -145,5 +145,47 @@
       },
       "val_reward": 108.93541666666663
     }
+  },
+  "Trace": {
+    "Threshold": {
+      "params": {
+        "up": 0.7,
+        "down": 0.4,
+        "cooldown": 0,
+        "mem": 0.6,
+        "err": 0.01
+      },
+      "val_reward": 69.50125
+    },
+    "HPA+Heal": {
+      "params": {
+        "target_cpu": 0.65,
+        "stabilization": 24,
+        "mem_threshold": 0.6,
+        "err_threshold": 0.01
+      },
+      "val_reward": 69.29625000000003
+    }
+  },
+  "TraceFaults": {
+    "Threshold": {
+      "params": {
+        "up": 0.6,
+        "down": 0.4,
+        "cooldown": 2,
+        "mem": 0.7,
+        "err": 0.01
+      },
+      "val_reward": 60.24174999999999
+    },
+    "HPA+Heal": {
+      "params": {
+        "target_cpu": 0.6,
+        "stabilization": 12,
+        "mem_threshold": 0.7,
+        "err_threshold": 0.01
+      },
+      "val_reward": 59.045500000000004
+    }
   }
 }

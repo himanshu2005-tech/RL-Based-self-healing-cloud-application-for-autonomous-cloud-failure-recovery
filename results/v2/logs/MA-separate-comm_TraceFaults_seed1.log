@@ -1,0 +1,26 @@
+Training MA-separate-comm_TraceFaults_seed1
+Token authentication is enabled for this Ray cluster. Set RAY_AUTH_MODE=disabled to opt out. For more information, see https://docs.ray.io/en/latest/ray-security/token-auth.html
+2026-10-07 23:50:34,093	WARNING algorithm_config.py:5160 -- You are running PPO on the new API stack! This is the new default behavior for this algorithm. If you don't want to use the new API stack, set `config.api_stack(enable_rl_module_and_learner=False,enable_env_runner_and_connector_v2=False)`. For a detailed migration guide, see here: https://docs.ray.io/en/master/rllib/new-api-stack-migration-guide.html
+DeprecationWarning: `RLModule(config=[RLModuleConfig object])` has been deprecated. Use `RLModule(observation_space=.., action_space=.., inference_only=.., model_config=.., catalog_class=..)` instead. This will raise an error in the future!
+Install gputil for GPU system monitoring.
+    20486 steps  val    -1.5
+    40970 steps  val     1.4
+    61455 steps  val     7.4
+    81940 steps  val     5.4
+   102430 steps  val     9.5
+   122917 steps  val    27.4
+   143403 steps  val    28.4
+   163889 steps  val    47.3
+   180279 steps  val    43.2
+   200765 steps  val    52.5
+   221251 steps  val    52.3
+   241737 steps  val    54.8
+   262224 steps  val    53.5
+   282711 steps  val    54.3
+   303196 steps  val    55.6
+   323684 steps  val    56.3
+   340072 steps  val    55.7
+   360560 steps  val    56.3
+   381045 steps  val    56.0
+   401532 steps  val    54.4
+Done MA-separate-comm_TraceFaults_seed1: best validation reward 56.3

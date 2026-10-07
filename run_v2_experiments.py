@@ -14,7 +14,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-from configs import SCENARIOS
+from configs import SCENARIOS, SYNTHETIC_SCENARIOS
 
 LOG_DIR = os.path.join("results", "v2", "logs")
 
@@ -29,7 +29,7 @@ def run(cmd, log_name):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3, 4, 5])
-    parser.add_argument("--envs", nargs="+", default=list(SCENARIOS))
+    parser.add_argument("--envs", nargs="+", default=SYNTHETIC_SCENARIOS)
     parser.add_argument("--algos", nargs="+", default=["PPO", "A2C", "DQN", "QLearning"])
     parser.add_argument("--jobs", type=int, default=6)
     parser.add_argument("--ablation-env", default=None)
