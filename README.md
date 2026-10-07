@@ -473,7 +473,76 @@ Same tests as for the synthetic scenarios, Holm-corrected across these 20 compar
   five-minute windows support 8-hour episodes but not full days.
 - RLlib used library-default PPO settings, with no hyperparameter search and no
   observation normalisation.
-- No comparison yet with published results from autoscaling / self-healing RL papers.
+- Published results come from other simulators and workloads, so the comparison with existing work is qualitative (see below).
+
+## Algorithm selection
+
+**Why these algorithms.** The action space is small and discrete (5 actions; 3 per agent
+in the multi-agent setup), the state is a short vector of continuous metrics, and a bad
+action can crash the service. So the candidates are value-based and policy-gradient
+methods for discrete actions:
+
+| Algorithm | Why it was considered | What the results show |
+|---|---|---|
+| Tabular Q-learning | The classic RL autoscaler from the literature (e.g. Rossi et al. 2019); a lower bound that needs no neural network | Clearly worst whenever faults are present (10–22 below PPO). The discretised state can't tell memory leaks and overload apart precisely enough, so it over-provisions. Fine only on the simplest load (Trace, no faults). |
+| DQN | Off-policy and sample-efficient; the standard deep value-based method for discrete actions | Close to PPO when it trains well, but unstable. It needed a settings sweep to stop collapsing (Mixed: 31.9 → 100.4), and seeds still diverge under faults (TraceFaults seed std 9.4). |
+| A2C | On-policy actor-critic; cheaper than PPO, with no clipping | Close to PPO everywhere (no significant seed-level difference) but slightly lower and flappier (up to 7.9 flaps per episode on Mixed). |
+| PPO | On-policy, clipped updates; the usual default for stable discrete control | Highest or tied-highest learned agent in 8 of 9 scenarios (on Trace, Q-learning is 0.2 higher, not significant), with a consistently small seed spread (seed std 0.3–1.5). |
+| RLlib PPO / multi-agent | The framework requirement, and the scaler / healer split | Works, but with default settings it was below SB3 PPO (observation normalisation is the likely gap). The multi-agent split did not help (see the trace results). |
+
+**Verdict:** PPO is the recommended algorithm. It is the only learned agent that is never
+significantly beaten by another learned agent, it is stable across seeds, and it reaches
+tuned-rule performance in all 9 scenarios with one set of hyperparameters. DQN is the
+runner-up when sample efficiency matters. The evidence:
+- 5 seeds × 100 shared test episodes
+- seed-level and episode-level tests with Holm correction
+- bootstrap confidence intervals
+- a reward ablation
+- rule baselines tuned on the same validation data
+
+## Comparison with existing work
+
+Published autoscaling and self-healing RL results come from different simulators,
+workloads and metrics, so their numbers **cannot be compared directly** with the rewards
+here. The table compares what each work does, what it compares against, and what it
+reports.
+
+| Work | Method | Compared against | Setting | Reported result |
+|---|---|---|---|---|
+| Rossi, Nardelli, Cardellini — *Horizontal and Vertical Scaling of Container-based Applications using RL*, IEEE CLOUD 2019 | Q-learning, Dyna-Q, model-based RL | Each other | Elastic Docker Swarm | RL policies for combined horizontal + vertical container scaling |
+| Arabnejad, Pahl, Jamshidi, Estrada — *A Comparison of RL Techniques for Fuzzy Cloud Auto-Scaling*, 2017 (arXiv:1705.07114) | Fuzzy Q-learning, fuzzy SARSA | Each other | OpenStack, sudden and periodic load | Both handle sudden and periodic load while reducing SLA violations and cost |
+| Qiu et al. — *FIRM*, OSDI 2020 | DDPG (fine-grained resource control) | Kubernetes autoscaling, AIMD | DeathStarBench, Train-Ticket microservices | Up to 16× fewer SLO violations than Kubernetes autoscaling, up to 62% less requested CPU |
+| Pereira dos Santos et al. — *gym-hpa*, NOMS 2023 | RL agents in an OpenAI Gym env for Kubernetes | Default Kubernetes HPA | Microservice benchmarks | 30% less resource use, 25% lower response time than the default HPA |
+| Qiu et al. — *AWARE*, USENIX ATC 2023 | RL with meta-learning and bootstrapping | Transfer-learning approach | Production cloud systems (UIUC + IBM Research) | 5.5× faster policy adaptation; 16.9× fewer SLO violations during training |
+| Agarwal, Rodriguez, Buyya — *Deep recurrent RL for serverless autoscaling*, IEEE TSC 2024 | PPO + LSTM | Threshold-based autoscaling, plain PPO | Simulated FaaS | +18% throughput vs threshold rules |
+| Rzadca et al. — *Autopilot*, EuroSys 2020 (Google) | ML recommenders + tuned heuristics (not RL) | Manual limits | Google's Borg fleet | 23% vs 46% slack; 10× fewer OOM-impacted jobs |
+| Levy et al. — *Narya*, OSDI 2020 (Microsoft Azure) | Failure prediction + RL-style online action selection | Previous static mitigation | Azure production | 26% fewer VM interruptions |
+| Prodanov et al. — *MARLISE*, IEEE CLOUD 2025 | Multi-agent DQN / PPO | Heuristic scaling | Edge-cloud microservices | Better resource efficiency at the same response time |
+| Fang, Gao — *Collaborative MARL for elastic cloud scaling*, 2025 (arXiv:2507.00550) | Multi-agent RL, centralised training / decentralised execution | Unspecified existing methods | Multi-tenant, bursty load | Better utilisation, SLA violations and scheduling latency |
+| Garí et al. — *RL-based application autoscaling in the cloud: a survey*, 2020 (arXiv:2001.09957) | Survey | – | – | RL suits autoscaling because policies adapt to uncertain, changing load |
+
+**How this project relates:**
+
+1. **Against default rules, our results agree with the literature.** Like gym-hpa and FIRM
+   against the default Kubernetes HPA, PPO clearly beats the *default* HPA + heal rule:
+   - +2.3 to +14.6 reward in 6 of 7 synthetic scenarios (significant)
+   - SLA violations cut from 17.4% to 8.0% (Bursty) and from 16.7% to 9.8% (Mixed)
+2. **Against tuned rules, the advantage mostly disappears.** Most published comparisons
+   use the default HPA or untuned thresholds. Here both rules were grid-searched on the
+   same validation data the RL agents use, and that closes the gap in 8 of 9 scenarios.
+   PPO still wins under bursty load (+2.8). This matches the Autopilot paper's point that
+   well-tuned heuristics are strong in production. A fair comparison needs tuned
+   baselines, and claimed RL gains should be read with that in mind.
+3. **Multi-agent: our result differs from the papers.** MARLISE and Fang & Gao report
+   gains from multi-agent RL. Their agents split control by *resource or service*. Ours
+   splits by *action type* (scaling vs healing) on a single service, and it didn't help:
+   the best variant matched single-agent RLlib PPO, and explicit communication made no
+   difference. A per-service split, with several services that interact, is the more
+   promising multi-agent design to try next.
+4. **Self-healing.** Narya and the fault scenarios here agree that learned action
+   selection can match or beat static mitigation. Here the RL agents learned the correct
+   fault → remedy mapping (restart for leaks, clear cache for error bursts) without it
+   being hand-coded.
 
 ## v1 results (original environment)
 
@@ -553,4 +622,4 @@ data_analysis/              Borg data: 2011 trace download + series builder; 201
 - [ ] Longer trace (the full 29 days, or several weeks) with day-long episodes
 - [ ] Tune RLlib PPO (observation normalisation, learning rate, entropy) and the
       multi-agent setup
-- [ ] Compare with published autoscaling / self-healing RL results
+- [x] Compare with published autoscaling / self-healing RL work (see [Comparison with existing work](#comparison-with-existing-work))
