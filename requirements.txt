@@ -1,7 +1,9 @@
-gymnasium==0.29.1
-stable-baselines3==2.3.2
+ray[rllib]==2.59.0
+gymnasium==1.2.2
+stable-baselines3==2.9.0
 numpy
 pandas
 matplotlib
 seaborn
-requests
+scipy
+pytest

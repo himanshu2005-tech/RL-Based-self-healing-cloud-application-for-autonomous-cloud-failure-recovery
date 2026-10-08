@@ -2,3 +2,6 @@
 *.csv filter=lfs diff=lfs merge=lfs -text
 *.gz filter=lfs diff=lfs merge=lfs -text
 *.zip filter=lfs diff=lfs merge=lfs -text
+# Small result tables are stored as normal Git files so GitHub renders them
+results/**/*.csv -filter -diff -merge text
+data_analysis/trace/*.csv -filter -diff -merge text

@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from environment.cloud_env import CloudSelfHealingEnv
 from agents.q_learning_agent import QLearningAgent
-from configs import CONFIGS, EnvConfig
+from configs import CONFIGS, make_config
 
 def set_seed(seed):
     random.seed(seed)
@@ -22,10 +22,7 @@ def main():
 
     set_seed(args.seed)
 
-    base_config = CONFIGS[args.config]
-    # Override ablation flags
-    base_config.cost_aware = args.cost_aware
-    base_config.anti_flapping = args.anti_flapping
+    base_config = make_config(args.config, cost_aware=args.cost_aware, anti_flapping=args.anti_flapping)
 
     env = CloudSelfHealingEnv(config=base_config)
     # We don't seed the env here directly with a global seed if we want it to be stochastic but reproducible per step,

@@ -8,7 +8,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.env_util import make_vec_env
 
 from environment.cloud_env import CloudSelfHealingEnv
-from configs import CONFIGS, EnvConfig
+from configs import CONFIGS, make_config
 
 def set_seed(seed):
     random.seed(seed)
@@ -36,17 +36,21 @@ class MetricsLoggingCallback(BaseCallback):
         self.current_reward += reward
         self.current_health += info.get("health_score", 0)
         self.current_steps += 1
+        self.current_crashes += int(info.get("crash", False))
+        self.current_flapping += int(info.get("flapping_penalty", 0.0) > 0)
         
         if done:
-            env = self.training_env.envs[0].unwrapped
             self.episode_rewards.append(self.current_reward)
             self.episode_healths.append(self.current_health / max(1, self.current_steps))
-            self.episode_crashes.append(env.crashes)
-            self.episode_flapping.append(env.flapping_incidents)
+            # DummyVecEnv has already reset the env here, so its counters are zero
+            self.episode_crashes.append(self.current_crashes)
+            self.episode_flapping.append(self.current_flapping)
             
             self.current_reward = 0
             self.current_health = 0
             self.current_steps = 0
+            self.current_crashes = 0
+            self.current_flapping = 0
             
         return True
 
@@ -61,9 +65,7 @@ def main():
 
     set_seed(args.seed)
 
-    base_config = CONFIGS[args.config]
-    base_config.cost_aware = args.cost_aware
-    base_config.anti_flapping = args.anti_flapping
+    base_config = make_config(args.config, cost_aware=args.cost_aware, anti_flapping=args.anti_flapping)
 
     def make_env():
         return CloudSelfHealingEnv(config=base_config)

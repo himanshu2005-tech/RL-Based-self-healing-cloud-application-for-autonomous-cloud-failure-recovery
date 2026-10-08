@@ -3,7 +3,8 @@ import json
 import ast
 import pandas as pd
 
-LOCAL_FILE = r"d:\RL\dataset\borg_traces_data.csv"
+# Repo-relative, so the script runs from any checkout (it was hard-coded to a d:\ path)
+LOCAL_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dataset", "borg_traces_data.csv")
 
 def calibrate():
     print(f"Reading and parsing data from {LOCAL_FILE}...")

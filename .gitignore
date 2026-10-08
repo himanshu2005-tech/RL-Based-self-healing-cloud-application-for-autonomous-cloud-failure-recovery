@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+.pytest_cache/
+data_analysis/trace/usage_part-*

@@ -1,0 +1,5 @@
+Environment,"Variant (PPO, trained with)",Seeds,Reward (Mean ± Std),Seed Std,SLA Violation %,Replicas,Crash Rate,Flaps / Ep,Actions R/U/D/C/H %
+Mixed,"Cost=True, Flapping=True",5,107.3 ± 14.9,0.9,9.8,8.19,0.00,3.65,1/11/6/9/72
+Mixed,"Cost=False, Flapping=True",5,106.0 ± 15.6,1.0,9.4,8.20,0.00,5.90,2/16/8/12/61
+Mixed,"Cost=True, Flapping=False",5,90.8 ± 16.8,10.0,9.6,7.71,0.00,39.90,2/25/20/6/48
+Mixed,"Cost=False, Flapping=False",5,70.3 ± 18.2,13.0,10.2,7.50,0.00,72.07,6/38/30/3/23

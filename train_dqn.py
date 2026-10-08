@@ -9,7 +9,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.env_util import make_vec_env
 
 from environment.cloud_env import CloudSelfHealingEnv
-from configs import CONFIGS, EnvConfig
+from configs import CONFIGS, make_config
 
 def set_seed(seed):
     random.seed(seed)
@@ -38,19 +38,23 @@ class MetricsLoggingCallback(BaseCallback):
         self.current_reward += reward
         self.current_health += info.get("health_score", 0)
         self.current_steps += 1
+        self.current_crashes += int(info.get("crash", False))
+        self.current_flapping += int(info.get("flapping_penalty", 0.0) > 0)
         
         if done:
             # We access the underlying env's accumulated variables
             # In DummyVecEnv, we can access the env directly
-            env = self.training_env.envs[0].unwrapped
             self.episode_rewards.append(self.current_reward)
             self.episode_healths.append(self.current_health / max(1, self.current_steps))
-            self.episode_crashes.append(env.crashes)
-            self.episode_flapping.append(env.flapping_incidents)
+            # DummyVecEnv has already reset the env here, so its counters are zero
+            self.episode_crashes.append(self.current_crashes)
+            self.episode_flapping.append(self.current_flapping)
             
             self.current_reward = 0
             self.current_health = 0
             self.current_steps = 0
+            self.current_crashes = 0
+            self.current_flapping = 0
             
         return True
 
@@ -65,9 +69,7 @@ def main():
 
     set_seed(args.seed)
 
-    base_config = CONFIGS[args.config]
-    base_config.cost_aware = args.cost_aware
-    base_config.anti_flapping = args.anti_flapping
+    base_config = make_config(args.config, cost_aware=args.cost_aware, anti_flapping=args.anti_flapping)
 
     def make_env():
         return CloudSelfHealingEnv(config=base_config)
@@ -76,7 +78,19 @@ def main():
 
     print(f"Training DQN on {args.config} | Seed {args.seed} | Cost-Aware {args.cost_aware} | Anti-Flapping {args.anti_flapping}")
 
-    model = DQN("MlpPolicy", env, verbose=0, seed=args.seed)
+    # SB3 defaults (target_update_interval=10000, learning_starts=100) sync the target
+    # network only twice in a 20k-step run, which leaves a near-passive policy.
+    model = DQN(
+        "MlpPolicy",
+        env,
+        target_update_interval=500,
+        learning_rate=5e-4,
+        exploration_fraction=0.3,
+        learning_starts=1000,
+        batch_size=64,
+        verbose=0,
+        seed=args.seed,
+    )
     
     callback = MetricsLoggingCallback()
     model.learn(total_timesteps=args.timesteps, callback=callback)
